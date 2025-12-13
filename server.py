@@ -2,6 +2,7 @@ from flask import Flask, request, jsonify, send_file
 import os
 import requests
 import io
+import sys
 
 app = Flask(__name__)
 
@@ -12,62 +13,72 @@ AZURE_SPEECH_REGION = os.getenv("AZURE_SPEECH_REGION")
 DEEPL_KEY = os.getenv("DEEPL_API_KEY")
 GROQ_KEY = os.getenv("GROQ_API_KEY")
 
-# --- 2. SINGLE PRODUCT CONFIGURATION ---
-# Now we only need ONE ID for the main "Anki App PRO" product
+# --- 2. SINGLE PRODUCT ID (From "Anki App PRO") ---
 PRODUCT_ID_MAIN = os.getenv("ID_MAIN") 
 
-# --- 3. TIERED LICENSE CHECK ---
+# --- 3. TIERED LICENSE CHECK (VERBOSE DEBUGGING) ---
 @app.route('/check-license', methods=['POST'])
 def check_license():
     user_key = request.json.get('key')
     if not user_key: return jsonify({"active": False}), 401
 
+    print(f"🔍 Checking Key: {user_key} against Product ID: {PRODUCT_ID_MAIN}") # DEBUG LOG
+
     try:
-        # Verify against the MAIN product
         res = requests.post(
             "https://api.gumroad.com/v2/licenses/verify",
             data={"product_id": PRODUCT_ID_MAIN, "license_key": user_key, "increment_uses_count": "false"}
         )
         
+        print(f"📡 Gumroad HTTP Status: {res.status_code}") # DEBUG LOG
+        
         if res.status_code == 200:
             data = res.json()
-            if not data.get("success"): return jsonify({"active": False})
+            print(f"📄 Gumroad Data: {data}") # DEBUG LOG - SEE THIS IN RENDER
+
+            if not data.get("success"):
+                print("❌ Gumroad said success=False")
+                return jsonify({"active": False})
 
             purchase = data.get("purchase", {})
             
-            # 1. Security Checks (Refund/Chargeback/Cancelled)
-            if purchase.get("refunded") or purchase.get("chargebacked"):
+            # 1. Security Checks
+            if purchase.get("refunded"):
+                print("❌ Key is Refunded")
                 return jsonify({"active": False})
-            if purchase.get("subscription_cancelled_at") or purchase.get("subscription_failed_at"):
+            if purchase.get("chargebacked"):
+                print("❌ Key is Chargebacked")
+                return jsonify({"active": False})
+            if purchase.get("subscription_cancelled_at"):
+                print("❌ Subscription Cancelled")
                 return jsonify({"active": False})
 
             # 2. DETECT VARIANT (TIER)
-            # Gumroad returns variants like: "Plan: Premium" or "Tier: Standard"
             variants = purchase.get("variants", "")
+            print(f"🏷️ Detected Variants: {variants}") # DEBUG LOG
+
+            detected_plan = "free" # Default
             
-            # Default to free if no variant found (safety net)
-            detected_plan = "free"
+            # Case-insensitive check
+            v_str = str(variants).lower()
+            if "premium" in v_str: detected_plan = "premium"
+            elif "standard" in v_str: detected_plan = "standard"
+            elif "free" in v_str: detected_plan = "free"
             
-            # Check for keywords in the variant name
-            if "Premium" in variants:
-                detected_plan = "premium"
-            elif "Standard" in variants:
-                detected_plan = "standard"
-            elif "Free" in variants:
-                detected_plan = "free"
-            
+            print(f"✅ Access Granted. Plan: {detected_plan}")
             return jsonify({"active": True, "plan": detected_plan})
-                
+        else:
+            print(f"❌ Gumroad Error Body: {res.text}")
+
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"💥 Server Exception: {e}")
 
     return jsonify({"active": False}), 401
 
-# --- 4. CREDITS & PROXIES (Standard) ---
+# --- 4. CREDITS & PROXIES ---
 @app.route('/credits', methods=['POST'])
 def get_credits():
     user_plan = request.json.get('plan', 'free')
-    # Premium gets 10k, Standard 5k, Free 0
     limits = {"free": 0, "standard": 5000, "premium": 10000}
     try:
         headers = {"xi-api-key": ELEVEN_KEY}
