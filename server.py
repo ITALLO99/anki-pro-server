@@ -12,78 +12,69 @@ AZURE_SPEECH_REGION = os.getenv("AZURE_SPEECH_REGION")
 DEEPL_KEY = os.getenv("DEEPL_API_KEY")
 GROQ_KEY = os.getenv("GROQ_API_KEY")
 
-# --- 2. MULTI-PRODUCT CONFIGURATION ---
-PRODUCT_ID_FREE = os.getenv("ID_FREE")
-PRODUCT_ID_STANDARD = os.getenv("ID_STANDARD")
-PRODUCT_ID_PREMIUM = os.getenv("ID_PREMIUM")
+# --- 2. SINGLE PRODUCT CONFIGURATION ---
+# Now we only need ONE ID for the main "Anki App PRO" product
+PRODUCT_ID_MAIN = os.getenv("ID_MAIN") 
 
-PLAN_MAP = {
-    PRODUCT_ID_FREE: "free",
-    PRODUCT_ID_STANDARD: "standard",
-    PRODUCT_ID_PREMIUM: "premium"
-}
-
-# --- 3. SMART LICENSE CHECK (STRICT MODE) ---
+# --- 3. TIERED LICENSE CHECK ---
 @app.route('/check-license', methods=['POST'])
 def check_license():
     user_key = request.json.get('key')
     if not user_key: return jsonify({"active": False}), 401
 
-    detected_plan = None
-    
-    for pid, plan_name in PLAN_MAP.items():
-        if not pid: continue 
+    try:
+        # Verify against the MAIN product
+        res = requests.post(
+            "https://api.gumroad.com/v2/licenses/verify",
+            data={"product_id": PRODUCT_ID_MAIN, "license_key": user_key, "increment_uses_count": "false"}
+        )
         
-        try:
-            # Verify with Gumroad
-            res = requests.post(
-                "https://api.gumroad.com/v2/licenses/verify",
-                data={"product_id": pid, "license_key": user_key, "increment_uses_count": "false"}
-            )
+        if res.status_code == 200:
+            data = res.json()
+            if not data.get("success"): return jsonify({"active": False})
+
+            purchase = data.get("purchase", {})
             
-            if res.status_code == 200:
-                data = res.json()
-                
-                # 1. Check BASIC SUCCESS (Key exists and belongs to product)
-                if not data.get("success"):
-                    continue 
+            # 1. Security Checks (Refund/Chargeback/Cancelled)
+            if purchase.get("refunded") or purchase.get("chargebacked"):
+                return jsonify({"active": False})
+            if purchase.get("subscription_cancelled_at") or purchase.get("subscription_failed_at"):
+                return jsonify({"active": False})
 
-                purchase = data.get("purchase", {})
+            # 2. DETECT VARIANT (TIER)
+            # Gumroad returns variants like: "Plan: Premium" or "Tier: Standard"
+            variants = purchase.get("variants", "")
+            
+            # Default to free if no variant found (safety net)
+            detected_plan = "free"
+            
+            # Check for keywords in the variant name
+            if "Premium" in variants:
+                detected_plan = "premium"
+            elif "Standard" in variants:
+                detected_plan = "standard"
+            elif "Free" in variants:
+                detected_plan = "free"
+            
+            return jsonify({"active": True, "plan": detected_plan})
                 
-                # 2. Check REFUND
-                if purchase.get("refunded"):
-                    continue 
+    except Exception as e:
+        print(f"Error: {e}")
 
-                # 3. Check CHARGEBACK
-                if purchase.get("chargebacked"):
-                    continue
-
-                # 4. Check SUBSCRIPTION DEAD
-                if purchase.get("subscription_cancelled_at") or purchase.get("subscription_failed_at"):
-                     continue
-                
-                # If we pass all checks, it's valid!
-                detected_plan = plan_name
-                break
-                
-        except: pass
-
-    if detected_plan:
-        return jsonify({"active": True, "plan": detected_plan})
-    
-    return jsonify({"active": False, "reason": "Invalid/Disabled"}), 401
+    return jsonify({"active": False}), 401
 
 # --- 4. CREDITS & PROXIES (Standard) ---
 @app.route('/credits', methods=['POST'])
 def get_credits():
     user_plan = request.json.get('plan', 'free')
+    # Premium gets 10k, Standard 5k, Free 0
     limits = {"free": 0, "standard": 5000, "premium": 10000}
     try:
         headers = {"xi-api-key": ELEVEN_KEY}
         r = requests.get("https://api.elevenlabs.io/v1/user/subscription", headers=headers, timeout=5)
         if r.status_code == 200: return jsonify({"remaining": limits.get(user_plan, 0)}) 
         return jsonify({"error": "Provider Error"}), 500
-    except Exception as e: return jsonify({"error": str(e)}), 500
+    except: return jsonify({"error": "Error"}), 500
 
 @app.route('/tts/elevenlabs', methods=['POST'])
 def tts_eleven():
