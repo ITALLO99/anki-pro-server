@@ -28,7 +28,7 @@ def check_license():
         response = requests.post(
             "https://api.gumroad.com/v2/licenses/verify",
             data={
-                "product_permalink": GUMROAD_PERMALINK,
+                "product_id": GUMROAD_PERMALINK,
                 "license_key": user_key,
                 "increment_uses_count": "true"  # Tracks how many times they install it
             }
