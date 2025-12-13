@@ -13,19 +13,17 @@ DEEPL_KEY = os.getenv("DEEPL_API_KEY")
 GROQ_KEY = os.getenv("GROQ_API_KEY")
 
 # --- 2. MULTI-PRODUCT CONFIGURATION ---
-# You will add these IDs in Render Environment Variables
 PRODUCT_ID_FREE = os.getenv("ID_FREE")
 PRODUCT_ID_STANDARD = os.getenv("ID_STANDARD")
 PRODUCT_ID_PREMIUM = os.getenv("ID_PREMIUM")
 
-# Map IDs to Plan Names
 PLAN_MAP = {
     PRODUCT_ID_FREE: "free",
     PRODUCT_ID_STANDARD: "standard",
     PRODUCT_ID_PREMIUM: "premium"
 }
 
-# --- 3. SMART LICENSE CHECK ---
+# --- 3. SMART LICENSE CHECK (STRICT MODE) ---
 @app.route('/check-license', methods=['POST'])
 def check_license():
     user_key = request.json.get('key')
@@ -33,12 +31,11 @@ def check_license():
 
     detected_plan = None
     
-    # Try verification against all 3 products to find which one fits
     for pid, plan_name in PLAN_MAP.items():
         if not pid: continue 
         
         try:
-            # Use 'product_id' as required by modern Gumroad API
+            # Verify with Gumroad
             res = requests.post(
                 "https://api.gumroad.com/v2/licenses/verify",
                 data={"product_id": pid, "license_key": user_key, "increment_uses_count": "false"}
@@ -46,50 +43,55 @@ def check_license():
             
             if res.status_code == 200:
                 data = res.json()
-                # Check success + active subscription
-                if data.get("success") and not data.get("purchase", {}).get("refunded", False):
-                    # Also check for cancelled subscriptions if you want strict enforcement
-                    if not data.get("purchase", {}).get("subscription_cancelled_at"):
-                        detected_plan = plan_name
-                        break
+                
+                # 1. Check BASIC SUCCESS (Key exists and belongs to product)
+                if not data.get("success"):
+                    continue 
+
+                purchase = data.get("purchase", {})
+                
+                # 2. Check REFUND
+                if purchase.get("refunded"):
+                    continue 
+
+                # 3. Check CHARGEBACK
+                if purchase.get("chargebacked"):
+                    continue
+
+                # 4. Check SUBSCRIPTION DEAD
+                if purchase.get("subscription_cancelled_at") or purchase.get("subscription_failed_at"):
+                     continue
+                
+                # If we pass all checks, it's valid!
+                detected_plan = plan_name
+                break
+                
         except: pass
 
     if detected_plan:
         return jsonify({"active": True, "plan": detected_plan})
     
-    return jsonify({"active": False}), 401
+    return jsonify({"active": False, "reason": "Invalid/Disabled"}), 401
 
-# --- 4. TIERED CREDITS CHECK ---
+# --- 4. CREDITS & PROXIES (Standard) ---
 @app.route('/credits', methods=['POST'])
 def get_credits():
     user_plan = request.json.get('plan', 'free')
-    
-    # DEFINE YOUR LIMITS HERE
-    limits = {
-        "free": 0,
-        "standard": 5000,
-        "premium": 10000
-    }
-    
+    limits = {"free": 0, "standard": 5000, "premium": 10000}
     try:
         headers = {"xi-api-key": ELEVEN_KEY}
         r = requests.get("https://api.elevenlabs.io/v1/user/subscription", headers=headers, timeout=5)
-        if r.status_code == 200:
-            # Return the limit specific to THEIR plan
-            return jsonify({"remaining": limits.get(user_plan, 0)}) 
+        if r.status_code == 200: return jsonify({"remaining": limits.get(user_plan, 0)}) 
         return jsonify({"error": "Provider Error"}), 500
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    except Exception as e: return jsonify({"error": str(e)}), 500
 
-# --- PROXIES (Standard) ---
 @app.route('/tts/elevenlabs', methods=['POST'])
 def tts_eleven():
     data = request.json
     url = f"https://api.elevenlabs.io/v1/text-to-speech/{data.get('voice_id')}"
     headers = {"xi-api-key": ELEVEN_KEY, "Content-Type": "application/json"}
     resp = requests.post(url, json={"text": data.get('text')}, headers=headers)
-    if resp.status_code == 200:
-        return send_file(io.BytesIO(resp.content), mimetype="audio/mpeg", as_attachment=True, download_name="a.mp3")
+    if resp.status_code == 200: return send_file(io.BytesIO(resp.content), mimetype="audio/mpeg", as_attachment=True, download_name="a.mp3")
     return jsonify({"error": "TTS Failed"}), 500
 
 @app.route('/translate/deepl', methods=['POST'])
