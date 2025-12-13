@@ -5,7 +5,7 @@ import io
 
 app = Flask(__name__)
 
-# --- 1. LOAD SECRETS (From Render Environment) ---
+# --- 1. LOAD SECRETS ---
 ELEVEN_KEY = os.getenv("ELEVENLABS_API_KEY")
 AZURE_SPEECH_KEY = os.getenv("AZURE_SPEECH_KEY")
 AZURE_SPEECH_REGION = os.getenv("AZURE_SPEECH_REGION")
@@ -17,13 +17,34 @@ GROQ_KEY = os.getenv("GROQ_API_KEY")
 # --- 2. LICENSE CHECK ---
 @app.route('/check-license', methods=['POST'])
 def check_license():
-    # In future, connect to Gumroad/Stripe API here
     user_key = request.json.get('key')
     if user_key and len(user_key) > 5:
         return jsonify({"active": True})
     return jsonify({"active": False}), 401
 
-# --- 3. ELEVENLABS PROXY ---
+# --- 3. CREDITS CHECK (NEW) ---
+@app.route('/credits', methods=['GET'])
+def get_credits():
+    """
+    Returns the Master Account balance.
+    FUTURE UPGRADE: Implement a database here to track 
+    'user_key' usage and enforce the 10k limit per user.
+    """
+    try:
+        headers = {"xi-api-key": ELEVEN_KEY}
+        r = requests.get("https://api.elevenlabs.io/v1/user/subscription", headers=headers, timeout=5)
+        if r.status_code == 200:
+            d = r.json()
+            total = d.get("character_count", 0)
+            used = d.get("character_used", 0)
+            # For now, return Master remaining. 
+            # Later, you can return min(10000, master_remaining) based on user logic.
+            return jsonify({"remaining": total - used, "limit": 10000}) 
+        return jsonify({"error": "Provider Error"}), 500
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+# --- 4. ELEVENLABS PROXY ---
 @app.route('/tts/elevenlabs', methods=['POST'])
 def tts_eleven():
     data = request.json
@@ -39,50 +60,35 @@ def tts_eleven():
         return send_file(io.BytesIO(response.content), mimetype="audio/mpeg", as_attachment=True, download_name="audio.mp3")
     return jsonify({"error": "Provider failed", "details": response.text}), 500
 
-# --- 4. DEEPL PROXY ---
+# --- 5. DEEPL PROXY ---
 @app.route('/translate/deepl', methods=['POST'])
 def translate_deepl():
     text = request.json.get('text')
-    # Determines if using Free or Pro API based on key format (usually free keys end in :fx)
     domain = "api-free.deepl.com" if ":fx" in DEEPL_KEY else "api.deepl.com"
     
     url = f"https://{domain}/v2/translate"
-    data = {
-        'auth_key': DEEPL_KEY,
-        'text': text,
-        'target_lang': 'PT'
-    }
+    data = {'auth_key': DEEPL_KEY, 'text': text, 'target_lang': 'PT'}
     
     response = requests.post(url, data=data)
     if response.status_code == 200:
         return jsonify(response.json())
     return jsonify({"error": "DeepL failed"}), 500
 
-# --- 5. GROQ AI PROXY ---
+# --- 6. GROQ AI PROXY ---
 @app.route('/ai/generate', methods=['POST'])
 def ai_generate():
     data = request.json
-    headers = {
-        "Authorization": f"Bearer {GROQ_KEY}",
-        "Content-Type": "application/json"
-    }
-    # Pass through the prompt structure
+    headers = {"Authorization": f"Bearer {GROQ_KEY}", "Content-Type": "application/json"}
     response = requests.post("https://api.groq.com/openai/v1/chat/completions", json=data, headers=headers)
     return jsonify(response.json())
 
-# --- 6. AZURE AUTH TOKEN (The Smart Way) ---
-# Instead of proxying heavy audio for transcription, we issue a temporary "Pass" 
-# that the desktop app can use for 10 minutes. This keeps the Master Key safe.
+# --- 7. AZURE TOKEN ---
 @app.route('/azure/token', methods=['GET'])
 def get_azure_token():
     fetch_url = f"https://{AZURE_SPEECH_REGION}.api.cognitive.microsoft.com/sts/v1.0/issueToken"
-    headers = {
-        'Ocp-Apim-Subscription-Key': AZURE_SPEECH_KEY
-    }
+    headers = {'Ocp-Apim-Subscription-Key': AZURE_SPEECH_KEY}
     response = requests.post(fetch_url, headers=headers)
-    
     if response.status_code == 200:
-        # Return the temporary token and the region
         return jsonify({"token": response.text, "region": AZURE_SPEECH_REGION})
     return jsonify({"error": "Azure Auth Failed"}), 401
 
