@@ -12,13 +12,13 @@ AZURE_SPEECH_REGION = os.getenv("AZURE_SPEECH_REGION")
 DEEPL_KEY = os.getenv("DEEPL_API_KEY")
 GROQ_KEY = os.getenv("GROQ_API_KEY")
 
-# --- 2. PLAN CONFIGURATION (From Render Env) ---
-# You will add these 3 IDs in Render later
+# --- 2. MULTI-PRODUCT CONFIGURATION ---
+# You will add these IDs in Render Environment Variables
 PRODUCT_ID_FREE = os.getenv("ID_FREE")
 PRODUCT_ID_STANDARD = os.getenv("ID_STANDARD")
 PRODUCT_ID_PREMIUM = os.getenv("ID_PREMIUM")
 
-# Map IDs to Plan Names for easy logic
+# Map IDs to Plan Names
 PLAN_MAP = {
     PRODUCT_ID_FREE: "free",
     PRODUCT_ID_STANDARD: "standard",
@@ -31,13 +31,14 @@ def check_license():
     user_key = request.json.get('key')
     if not user_key: return jsonify({"active": False}), 401
 
-    # We try checking the key against all 3 products
     detected_plan = None
     
+    # Try verification against all 3 products to find which one fits
     for pid, plan_name in PLAN_MAP.items():
-        if not pid: continue # Skip if not set in Render yet
+        if not pid: continue 
         
         try:
+            # Use 'product_id' as required by modern Gumroad API
             res = requests.post(
                 "https://api.gumroad.com/v2/licenses/verify",
                 data={"product_id": pid, "license_key": user_key, "increment_uses_count": "false"}
@@ -45,25 +46,25 @@ def check_license():
             
             if res.status_code == 200:
                 data = res.json()
+                # Check success + active subscription
                 if data.get("success") and not data.get("purchase", {}).get("refunded", False):
-                    # Found it!
-                    detected_plan = plan_name
-                    break # Stop checking other products
+                    # Also check for cancelled subscriptions if you want strict enforcement
+                    if not data.get("purchase", {}).get("subscription_cancelled_at"):
+                        detected_plan = plan_name
+                        break
         except: pass
 
     if detected_plan:
-        # Return success AND the plan type
         return jsonify({"active": True, "plan": detected_plan})
     
     return jsonify({"active": False}), 401
 
-# --- 4. CREDITS CHECK (Dynamic Limit) ---
-@app.route('/credits', methods=['POST']) # Changed to POST to receive plan info
+# --- 4. TIERED CREDITS CHECK ---
+@app.route('/credits', methods=['POST'])
 def get_credits():
-    # The app sends us the user's plan so we know which limit to show
     user_plan = request.json.get('plan', 'free')
     
-    # Define Limits
+    # DEFINE YOUR LIMITS HERE
     limits = {
         "free": 0,
         "standard": 5000,
@@ -71,25 +72,45 @@ def get_credits():
     }
     
     try:
-        # Get Master Balance (Real ElevenLabs Account)
         headers = {"xi-api-key": ELEVEN_KEY}
         r = requests.get("https://api.elevenlabs.io/v1/user/subscription", headers=headers, timeout=5)
-        
         if r.status_code == 200:
-            d = r.json()
-            master_remaining = d.get("character_count", 0) - d.get("character_used", 0)
-            
-            # The User's "Virtual Balance" is the Plan Limit
-            # (In a real SaaS, you'd track their individual usage in a database. 
-            # For now, we just display their theoretical cap).
-            user_cap = limits.get(user_plan, 0)
-            
-            return jsonify({
-                "remaining": user_cap, # Show user their plan limit
-                "master_pool": master_remaining # Internal debug info if needed
-            })
-    except: pass
-    return jsonify({"error": "Error"}), 500
+            # Return the limit specific to THEIR plan
+            return jsonify({"remaining": limits.get(user_plan, 0)}) 
+        return jsonify({"error": "Provider Error"}), 500
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
-# ... (Keep tts_eleven, translate_deepl, ai_generate, get_azure_token exactly as they were) ...
-# Just copy the proxy functions from v36.0 here
+# --- PROXIES (Standard) ---
+@app.route('/tts/elevenlabs', methods=['POST'])
+def tts_eleven():
+    data = request.json
+    url = f"https://api.elevenlabs.io/v1/text-to-speech/{data.get('voice_id')}"
+    headers = {"xi-api-key": ELEVEN_KEY, "Content-Type": "application/json"}
+    resp = requests.post(url, json={"text": data.get('text')}, headers=headers)
+    if resp.status_code == 200:
+        return send_file(io.BytesIO(resp.content), mimetype="audio/mpeg", as_attachment=True, download_name="a.mp3")
+    return jsonify({"error": "TTS Failed"}), 500
+
+@app.route('/translate/deepl', methods=['POST'])
+def translate_deepl():
+    text = request.json.get('text')
+    domain = "api-free.deepl.com" if ":fx" in DEEPL_KEY else "api.deepl.com"
+    resp = requests.post(f"https://{domain}/v2/translate", data={'auth_key': DEEPL_KEY, 'text': text, 'target_lang': 'PT'})
+    return jsonify(resp.json())
+
+@app.route('/ai/generate', methods=['POST'])
+def ai_generate():
+    headers = {"Authorization": f"Bearer {GROQ_KEY}", "Content-Type": "application/json"}
+    resp = requests.post("https://api.groq.com/openai/v1/chat/completions", json=request.json, headers=headers)
+    return jsonify(resp.json())
+
+@app.route('/azure/token', methods=['GET'])
+def get_azure_token():
+    url = f"https://{AZURE_SPEECH_REGION}.api.cognitive.microsoft.com/sts/v1.0/issueToken"
+    resp = requests.post(url, headers={'Ocp-Apim-Subscription-Key': AZURE_SPEECH_KEY})
+    if resp.status_code == 200: return jsonify({"token": resp.text, "region": AZURE_SPEECH_REGION})
+    return jsonify({"error": "Auth Failed"}), 401
+
+if __name__ == '__main__':
+    app.run(port=5000)
