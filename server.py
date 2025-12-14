@@ -13,7 +13,7 @@ LATEST_VERSION = "v62.0"
 
 # 2. PASTE THE GITHUB LINK HERE (from Part 1, Step 6)
 # Example: "https://github.com/ITALLO99/anki-pro-server/releases/download/v62.0/AnkiProApp.exe"
-DOWNLOAD_URL = "PASTE_YOUR_GITHUB_EXE_LINK_HERE" 
+DOWNLOAD_URL = "https://github.com/ITALLO99/anki-pro-server/releases/download/v62.0/anki_pro_app.exe" 
 
 active_sessions = {} 
 
@@ -113,3 +113,4 @@ def home():
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
     app.run(host='0.0.0.0', port=port)
+
