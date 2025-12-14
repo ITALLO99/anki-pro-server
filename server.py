@@ -6,8 +6,9 @@ import sys
 app = Flask(__name__)
 
 # --- CONFIGURATION ---
-# FIX: Gumroad explicitly demanded this Product ID
 PRODUCT_ID = "6Nm28bZgTFYl9u1nlijDBA==" 
+LATEST_VERSION = "v61.0" # CHANGE THIS when you release v62, v63, etc.
+DOWNLOAD_URL = "https://italotpra.gumroad.com/l/kybfx" # Where users download the new version
 
 active_sessions = {} 
 
@@ -18,7 +19,6 @@ def verify_gumroad(license_key):
     url = "https://api.gumroad.com/v2/licenses/verify"
     clean_key = license_key.strip()
     
-    # Payload using Product ID
     payload = {
         "product_id": PRODUCT_ID,
         "license_key": clean_key,
@@ -31,13 +31,11 @@ def verify_gumroad(license_key):
     
     try:
         log(f"--- CHECKING KEY: {clean_key} ---")
-        
         response = requests.post(url, data=payload, headers=headers)
         
         try:
             data = response.json()
         except:
-            log(f"Gumroad Non-JSON Response: {response.text}")
             return {"valid": False, "reason": "Gumroad returned non-JSON"}
 
         if data.get("success"):
@@ -50,12 +48,18 @@ def verify_gumroad(license_key):
             
             return {"valid": True, "plan": plan}
         else:
-            reason = data.get("message", "Unknown Error")
-            return {"valid": False, "reason": reason}
+            return {"valid": False, "reason": data.get("message", "Unknown Error")}
             
     except Exception as e:
-        log(f"Connection Error: {e}")
         return {"valid": False, "reason": str(e)}
+
+@app.route('/version', methods=['GET'])
+def get_version():
+    """Returns the latest version for auto-updates."""
+    return jsonify({
+        "version": LATEST_VERSION,
+        "url": DOWNLOAD_URL
+    })
 
 @app.route('/check-license', methods=['POST'])
 def check_license():
@@ -99,7 +103,7 @@ def check_credits():
 
 @app.route('/')
 def home():
-    return "Anki Pro Server v60.0 (Server.py Fixed)"
+    return f"Anki Pro Server {LATEST_VERSION} Running"
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
