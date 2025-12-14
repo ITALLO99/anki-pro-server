@@ -9,31 +9,29 @@ GUMROAD_ACCESS_TOKEN = os.environ.get("GUMROAD_ACCESS_TOKEN", "YOUR_GUMROAD_TOKE
 PRODUCT_PERMALINK = "kybfx"  # Your Gumroad product permalink
 
 # --- IN-MEMORY DATABASE FOR LOCKING ---
-# In a real production app, use Redis or a Database. 
-# For Render Free Tier, this resets on every deploy/restart, which is actually good for resetting stuck users.
-active_sessions = {}  # Format: { "LICENSE_KEY": "MACHINE_ID" }
+active_sessions = {}  # { "LICENSE_KEY": "MACHINE_ID" }
 
 def verify_gumroad(license_key):
-    """Checks Gumroad API to see if key exists and get the plan."""
+    """Checks Gumroad API using Form Data (Correct Method)."""
     url = "https://api.gumroad.com/v2/licenses/verify"
-    params = {
+    # IMPORTANT: Use 'data' not 'params' for POST requests
+    payload = {
         "product_permalink": PRODUCT_PERMALINK,
         "license_key": license_key,
-        "increment_uses_count": "false"  # Don't use up the activation limit, we manage it manually
+        "increment_uses_count": "false"
     }
     
     try:
-        response = requests.post(url, params=params)
+        # Changed params=payload to data=payload
+        response = requests.post(url, data=payload) 
         data = response.json()
         
         if data.get("success"):
-            # Determine Plan based on Variant (Tier) name
             variant = data["purchase"].get("variants", "")
             plan = "free"
             if "Standard" in variant: plan = "standard"
             if "Premium" in variant: plan = "premium"
-            
-            return {"valid": True, "plan": plan, "uses": data["purchase"]["uses"]}
+            return {"valid": True, "plan": plan}
         else:
             return {"valid": False}
     except Exception as e:
@@ -54,24 +52,14 @@ def check_license():
     if not gumroad_data["valid"]:
         return jsonify({"active": False, "message": "Invalid Key"}), 401
 
-    # 2. Concurrency Check (Machine ID Lock)
-    # If this key is already in memory
+    # 2. Concurrency Check
     if license_key in active_sessions:
         registered_machine = active_sessions[license_key]
-        
-        # If the machine requesting is DIFFERENT from the registered one -> BLOCK
         if machine_id and registered_machine != machine_id:
-             return jsonify({
-                 "active": False, 
-                 "message": "Key is active on another device.",
-                 "code": "CONCURRENT_ACCESS"
-             }), 409
+             return jsonify({"active": False, "message": "Concurrent Access", "code": "CONCURRENT_ACCESS"}), 409
     else:
-        # First time seeing this key (since server restart), lock it to this machine
-        if machine_id:
-            active_sessions[license_key] = machine_id
+        if machine_id: active_sessions[license_key] = machine_id
 
-    # 3. Return Success
     return jsonify({
         "active": True,
         "plan": gumroad_data["plan"],
@@ -80,7 +68,6 @@ def check_license():
 
 @app.route('/credits', methods=['POST'])
 def check_credits():
-    # Simple mock for credits
     data = request.json
     plan = data.get("plan", "free")
     credits = 0
@@ -90,7 +77,7 @@ def check_credits():
 
 @app.route('/')
 def home():
-    return "Anki Pro Server Running"
+    return "Anki Pro Server Running - v56"
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
