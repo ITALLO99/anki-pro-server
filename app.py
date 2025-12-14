@@ -1,20 +1,18 @@
 from flask import Flask, request, jsonify
 import requests
 import os
+import sys
 
 app = Flask(__name__)
 
 # --- CONFIGURATION ---
 GUMROAD_ACCESS_TOKEN = os.environ.get("GUMROAD_ACCESS_TOKEN", "YOUR_GUMROAD_TOKEN_HERE")
-PRODUCT_PERMALINK = "kybfx"  # Your Gumroad product permalink
+PRODUCT_PERMALINK = "kybfx" 
 
-# --- IN-MEMORY DATABASE FOR LOCKING ---
-active_sessions = {}  # { "LICENSE_KEY": "MACHINE_ID" }
+active_sessions = {} 
 
 def verify_gumroad(license_key):
-    """Checks Gumroad API using Form Data (Correct Method)."""
     url = "https://api.gumroad.com/v2/licenses/verify"
-    # IMPORTANT: Use 'data' not 'params' for POST requests
     payload = {
         "product_permalink": PRODUCT_PERMALINK,
         "license_key": license_key,
@@ -22,8 +20,15 @@ def verify_gumroad(license_key):
     }
     
     try:
-        # Changed params=payload to data=payload
-        response = requests.post(url, data=payload) 
+        # Debugging: Print exactly what we are sending
+        print(f"Checking Key: {license_key} for Product: {PRODUCT_PERMALINK}", file=sys.stdout)
+        
+        response = requests.post(url, data=payload)
+        
+        # Debugging: Print exactly what Gumroad replied
+        print(f"Gumroad Response Status: {response.status_code}", file=sys.stdout)
+        print(f"Gumroad Response Body: {response.text}", file=sys.stdout)
+        
         data = response.json()
         
         if data.get("success"):
@@ -35,6 +40,7 @@ def verify_gumroad(license_key):
         else:
             return {"valid": False}
     except Exception as e:
+        print(f"Gumroad Connection Error: {e}", file=sys.stdout)
         return {"valid": False, "error": str(e)}
 
 @app.route('/check-license', methods=['POST'])
@@ -46,13 +52,11 @@ def check_license():
     if not license_key:
         return jsonify({"active": False, "message": "No key provided"}), 400
 
-    # 1. Verify with Gumroad
     gumroad_data = verify_gumroad(license_key)
     
     if not gumroad_data["valid"]:
         return jsonify({"active": False, "message": "Invalid Key"}), 401
 
-    # 2. Concurrency Check
     if license_key in active_sessions:
         registered_machine = active_sessions[license_key]
         if machine_id and registered_machine != machine_id:
@@ -77,7 +81,7 @@ def check_credits():
 
 @app.route('/')
 def home():
-    return "Anki Pro Server Running - v56"
+    return "Anki Pro Server Running - v57 Debug Mode"
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
