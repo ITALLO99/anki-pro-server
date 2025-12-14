@@ -1,120 +1,105 @@
-from flask import Flask, request, jsonify, send_file
-import os
+from flask import Flask, request, jsonify
 import requests
-import io
+import os
 import sys
 
 app = Flask(__name__)
 
-# --- 1. SECRETS ---
-ELEVEN_KEY = os.getenv("ELEVENLABS_API_KEY")
-AZURE_SPEECH_KEY = os.getenv("AZURE_SPEECH_KEY")
-AZURE_SPEECH_REGION = os.getenv("AZURE_SPEECH_REGION")
-DEEPL_KEY = os.getenv("DEEPL_API_KEY")
-GROQ_KEY = os.getenv("GROQ_API_KEY")
+# --- CONFIGURATION ---
+# FIX: Gumroad explicitly demanded this Product ID
+PRODUCT_ID = "6Nm28bZgTFYl9u1nlijDBA==" 
 
-# --- 2. SINGLE PRODUCT ID (From "Anki App PRO") ---
-PRODUCT_ID_MAIN = os.getenv("ID_MAIN") 
+active_sessions = {} 
 
-# --- 3. TIERED LICENSE CHECK (VERBOSE DEBUGGING) ---
+def log(msg):
+    print(msg, file=sys.stdout, flush=True)
+
+def verify_gumroad(license_key):
+    url = "https://api.gumroad.com/v2/licenses/verify"
+    clean_key = license_key.strip()
+    
+    # Payload using Product ID
+    payload = {
+        "product_id": PRODUCT_ID,
+        "license_key": clean_key,
+        "increment_uses_count": "false"
+    }
+    
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+    
+    try:
+        log(f"--- CHECKING KEY: {clean_key} ---")
+        
+        response = requests.post(url, data=payload, headers=headers)
+        
+        try:
+            data = response.json()
+        except:
+            log(f"Gumroad Non-JSON Response: {response.text}")
+            return {"valid": False, "reason": "Gumroad returned non-JSON"}
+
+        if data.get("success"):
+            variant = data["purchase"].get("variants", "")
+            
+            plan = "free"
+            if "Standard" in variant: plan = "standard"
+            if "Premium" in variant: plan = "premium"
+            
+            return {"valid": True, "plan": plan}
+        else:
+            reason = data.get("message", "Unknown Error")
+            return {"valid": False, "reason": reason}
+            
+    except Exception as e:
+        log(f"Connection Error: {e}")
+        return {"valid": False, "reason": str(e)}
+
 @app.route('/check-license', methods=['POST'])
 def check_license():
-    user_key = request.json.get('key')
-    if not user_key: return jsonify({"active": False}), 401
-
-    print(f"🔍 Checking Key: {user_key} against Product ID: {PRODUCT_ID_MAIN}") # DEBUG LOG
-
-    try:
-        res = requests.post(
-            "https://api.gumroad.com/v2/licenses/verify",
-            data={"product_id": PRODUCT_ID_MAIN, "license_key": user_key, "increment_uses_count": "false"}
-        )
-        
-        print(f"📡 Gumroad HTTP Status: {res.status_code}") # DEBUG LOG
-        
-        if res.status_code == 200:
-            data = res.json()
-            print(f"📄 Gumroad Data: {data}") # DEBUG LOG - SEE THIS IN RENDER
-
-            if not data.get("success"):
-                print("❌ Gumroad said success=False")
-                return jsonify({"active": False})
-
-            purchase = data.get("purchase", {})
-            
-            # 1. Security Checks
-            if purchase.get("refunded"):
-                print("❌ Key is Refunded")
-                return jsonify({"active": False})
-            if purchase.get("chargebacked"):
-                print("❌ Key is Chargebacked")
-                return jsonify({"active": False})
-            if purchase.get("subscription_cancelled_at"):
-                print("❌ Subscription Cancelled")
-                return jsonify({"active": False})
-
-            # 2. DETECT VARIANT (TIER)
-            variants = purchase.get("variants", "")
-            print(f"🏷️ Detected Variants: {variants}") # DEBUG LOG
-
-            detected_plan = "free" # Default
-            
-            # Case-insensitive check
-            v_str = str(variants).lower()
-            if "premium" in v_str: detected_plan = "premium"
-            elif "standard" in v_str: detected_plan = "standard"
-            elif "free" in v_str: detected_plan = "free"
-            
-            print(f"✅ Access Granted. Plan: {detected_plan}")
-            return jsonify({"active": True, "plan": detected_plan})
-        else:
-            print(f"❌ Gumroad Error Body: {res.text}")
-
-    except Exception as e:
-        print(f"💥 Server Exception: {e}")
-
-    return jsonify({"active": False}), 401
-
-# --- 4. CREDITS & PROXIES ---
-@app.route('/credits', methods=['POST'])
-def get_credits():
-    user_plan = request.json.get('plan', 'free')
-    limits = {"free": 0, "standard": 5000, "premium": 10000}
-    try:
-        headers = {"xi-api-key": ELEVEN_KEY}
-        r = requests.get("https://api.elevenlabs.io/v1/user/subscription", headers=headers, timeout=5)
-        if r.status_code == 200: return jsonify({"remaining": limits.get(user_plan, 0)}) 
-        return jsonify({"error": "Provider Error"}), 500
-    except: return jsonify({"error": "Error"}), 500
-
-@app.route('/tts/elevenlabs', methods=['POST'])
-def tts_eleven():
     data = request.json
-    url = f"https://api.elevenlabs.io/v1/text-to-speech/{data.get('voice_id')}"
-    headers = {"xi-api-key": ELEVEN_KEY, "Content-Type": "application/json"}
-    resp = requests.post(url, json={"text": data.get('text')}, headers=headers)
-    if resp.status_code == 200: return send_file(io.BytesIO(resp.content), mimetype="audio/mpeg", as_attachment=True, download_name="a.mp3")
-    return jsonify({"error": "TTS Failed"}), 500
+    raw_key = data.get("license_key", "")
+    machine_id = data.get("machine_id")
 
-@app.route('/translate/deepl', methods=['POST'])
-def translate_deepl():
-    text = request.json.get('text')
-    domain = "api-free.deepl.com" if ":fx" in DEEPL_KEY else "api.deepl.com"
-    resp = requests.post(f"https://{domain}/v2/translate", data={'auth_key': DEEPL_KEY, 'text': text, 'target_lang': 'PT'})
-    return jsonify(resp.json())
+    if not raw_key:
+        return jsonify({"active": False, "message": "No key provided"}), 400
 
-@app.route('/ai/generate', methods=['POST'])
-def ai_generate():
-    headers = {"Authorization": f"Bearer {GROQ_KEY}", "Content-Type": "application/json"}
-    resp = requests.post("https://api.groq.com/openai/v1/chat/completions", json=request.json, headers=headers)
-    return jsonify(resp.json())
+    gumroad_result = verify_gumroad(raw_key)
+    
+    if not gumroad_result["valid"]:
+        log(f"FAILURE: {gumroad_result['reason']}")
+        return jsonify({"active": False, "message": gumroad_result['reason']}), 401
 
-@app.route('/azure/token', methods=['GET'])
-def get_azure_token():
-    url = f"https://{AZURE_SPEECH_REGION}.api.cognitive.microsoft.com/sts/v1.0/issueToken"
-    resp = requests.post(url, headers={'Ocp-Apim-Subscription-Key': AZURE_SPEECH_KEY})
-    if resp.status_code == 200: return jsonify({"token": resp.text, "region": AZURE_SPEECH_REGION})
-    return jsonify({"error": "Auth Failed"}), 401
+    clean_key = raw_key.strip()
+    if clean_key in active_sessions:
+        registered_machine = active_sessions[clean_key]
+        if machine_id and registered_machine != machine_id:
+             log(f"Blocked Concurrent Access: {clean_key}")
+             return jsonify({"active": False, "message": "Concurrent Access", "code": "CONCURRENT_ACCESS"}), 409
+    else:
+        if machine_id: active_sessions[clean_key] = machine_id
+
+    log(f"Success! Plan: {gumroad_result['plan']}")
+    return jsonify({
+        "active": True,
+        "plan": gumroad_result['plan'],
+        "remaining_credits": 5000 if gumroad_result["plan"] == "standard" else (10000 if gumroad_result["plan"] == "premium" else 0)
+    })
+
+@app.route('/credits', methods=['POST'])
+def check_credits():
+    data = request.json
+    plan = data.get("plan", "free")
+    credits = 0
+    if plan == "standard": credits = 5000
+    if plan == "premium": credits = 10000
+    return jsonify({"remaining": credits})
+
+@app.route('/')
+def home():
+    return "Anki Pro Server v60.0 (Server.py Fixed)"
 
 if __name__ == '__main__':
-    app.run(port=5000)
+    port = int(os.environ.get('PORT', 10000))
+    app.run(host='0.0.0.0', port=port)
