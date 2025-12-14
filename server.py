@@ -42,10 +42,11 @@ def verify_gumroad(license_key):
 
         if data.get("success"):
             variant = data["purchase"].get("variants", "")
+            product_name = data["purchase"].get("product_name", "")
             
             plan = "free"
-            if "Standard" in variant: plan = "standard"
-            if "Premium" in variant: plan = "premium"
+            if "Standard" in variant or "Standard" in product_name: plan = "standard"
+            if "Premium" in variant or "Premium" in product_name: plan = "premium"
             
             return {"valid": True, "plan": plan}
         else:
