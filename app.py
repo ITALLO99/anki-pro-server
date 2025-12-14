@@ -6,7 +6,7 @@ import sys
 app = Flask(__name__)
 
 # --- CONFIGURATION ---
-# FIX: Gumroad explicitly demanded this Product ID instead of the permalink
+# FIX CONFIRMED: Using Product ID as demanded by Gumroad
 PRODUCT_ID = "6Nm28bZgTFYl9u1nlijDBA==" 
 
 active_sessions = {} 
@@ -18,41 +18,35 @@ def verify_gumroad(license_key):
     url = "https://api.gumroad.com/v2/licenses/verify"
     clean_key = license_key.strip()
     
-    # FIX: Switched from 'product_permalink' to 'product_id' as required by error 500
+    # Payload using Product ID (Confirmed Working)
     payload = {
         "product_id": PRODUCT_ID,
         "license_key": clean_key,
         "increment_uses_count": "false"
     }
     
-    # Anti-Block Headers
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }
     
     try:
-        log(f"--- CHECKING KEY: {clean_key} using PRODUCT_ID ---")
+        log(f"--- CHECKING KEY: {clean_key} ---")
         
         response = requests.post(url, data=payload, headers=headers)
-        
-        log(f"Gumroad HTTP Code: {response.status_code}")
-        log(f"Gumroad Response: {response.text}")
         
         try:
             data = response.json()
         except:
+            log(f"Gumroad Non-JSON Response: {response.text}")
             return {"valid": False, "reason": "Gumroad returned non-JSON"}
 
         if data.get("success"):
-            # Check Plan Name
-            # Note: Sometimes Gumroad calls it "name" inside "variants" or just "name" of the product
-            # We will check both to be safe
+            # Check Plan based on Variant Name
             variant = data["purchase"].get("variants", "")
-            product_name = data["purchase"].get("product_name", "")
             
             plan = "free"
-            if "Standard" in variant or "Standard" in product_name: plan = "standard"
-            if "Premium" in variant or "Premium" in product_name: plan = "premium"
+            if "Standard" in variant: plan = "standard"
+            if "Premium" in variant: plan = "premium"
             
             return {"valid": True, "plan": plan}
         else:
@@ -75,14 +69,14 @@ def check_license():
     gumroad_result = verify_gumroad(raw_key)
     
     if not gumroad_result["valid"]:
-        log(f"FAILURE REASON: {gumroad_result['reason']}")
+        log(f"FAILURE: {gumroad_result['reason']}")
         return jsonify({"active": False, "message": gumroad_result['reason']}), 401
 
     clean_key = raw_key.strip()
     if clean_key in active_sessions:
         registered_machine = active_sessions[clean_key]
         if machine_id and registered_machine != machine_id:
-             log(f"Concurrent Access Blocked: {clean_key}")
+             log(f"Blocked Concurrent Access: {clean_key}")
              return jsonify({"active": False, "message": "Concurrent Access", "code": "CONCURRENT_ACCESS"}), 409
     else:
         if machine_id: active_sessions[clean_key] = machine_id
@@ -105,7 +99,7 @@ def check_credits():
 
 @app.route('/')
 def home():
-    return "Anki Pro Server v60.0 (Product ID Fix)"
+    return "Anki Pro Server v60.0 (ID FIX)"
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
