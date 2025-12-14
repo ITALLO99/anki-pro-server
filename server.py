@@ -7,8 +7,10 @@ app = Flask(__name__)
 
 # --- CONFIGURATION ---
 PRODUCT_ID = "6Nm28bZgTFYl9u1nlijDBA==" 
-LATEST_VERSION = "v61.0" # CHANGE THIS when you release v62, v63, etc.
-DOWNLOAD_URL = "https://italotpra.gumroad.com/l/kybfx" # Where users download the new version
+LATEST_VERSION = "v62.0" # UPDATE THIS every time you release a new version
+# IMPORTANT: This must be a DIRECT link to the file, not a Gumroad page.
+# Example: https://github.com/YourUser/Repo/releases/download/v62/AnkiApp.exe
+DOWNLOAD_URL = "YOUR_DIRECT_FILE_LINK_HERE" 
 
 active_sessions = {} 
 
@@ -55,7 +57,7 @@ def verify_gumroad(license_key):
 
 @app.route('/version', methods=['GET'])
 def get_version():
-    """Returns the latest version for auto-updates."""
+    """Returns the latest version and DIRECT download link."""
     return jsonify({
         "version": LATEST_VERSION,
         "url": DOWNLOAD_URL
