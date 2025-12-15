@@ -1,3 +1,5 @@
 flask
 requests
 gunicorn
+groq
+azure-cognitiveservices-speech
