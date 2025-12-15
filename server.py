@@ -9,7 +9,7 @@ app = Flask(__name__)
 PRODUCT_ID = "6Nm28bZgTFYl9u1nlijDBA==" 
 
 # 1. UPDATE THIS NUMBER when you release a new version
-LATEST_VERSION = "v62.0" 
+LATEST_VERSION = "v64.0" 
 
 # 2. PASTE THE GITHUB LINK HERE (from Part 1, Step 6)
 # Example: "https://github.com/ITALLO99/anki-pro-server/releases/download/v62.0/AnkiProApp.exe"
@@ -113,6 +113,7 @@ def home():
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
     app.run(host='0.0.0.0', port=port)
+
 
 
 
