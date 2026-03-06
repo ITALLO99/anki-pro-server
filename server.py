@@ -7,14 +7,15 @@ from datetime import datetime
 
 app = Flask(__name__)
 
-# --- OS SEUS 3 PRODUTOS DO GUMROAD ---
-PERMALINKS = [
-    "kybfx",      # Plano Mensal
-    "toreea",     # Acesso Vitalício
-    "nuixna"      # Add-ons (Créditos IA)
+# --- OS SEUS PRODUTOS DO GUMROAD (Identificadores) ---
+# Usamos tanto o Product ID quanto os Permalinks para garantir 100% de compatibilidade!
+GUMROAD_PRODUCTS = [
+    {"type": "product_id", "value": "6Nm28bZgTFYl9u1nlijDBA=="}, # O seu produto Mensal (Anki App PRO)
+    {"type": "product_permalink", "value": "kybfx"},              # Backup Mensal
+    {"type": "product_permalink", "value": "toreea"},             # Produto Vitalício
+    {"type": "product_permalink", "value": "nuixna"}              # Produto de Recarga (Add-ons)
 ]
 
-PRODUCT_ID = "6Nm28bZgTFYl9u1nlijDBA==" 
 active_sessions = {} 
 
 GROQ_KEY = os.environ.get("GROQ_API_KEY", "").strip()
@@ -29,18 +30,15 @@ WELLSAID_KEY = os.environ.get("WELL_SAID_LABS_API_KEY", "").strip()
 CARTESIA_KEY = os.environ.get("CARTESIA_API_KEY", "").strip()
 HF_KEY = os.environ.get("HF_API_KEY", "").strip()
 
-# --- NOVO: WEBHOOK PARA AVISAR O CEO NO CELULAR ---
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL", "").strip()
 
 # ==============================================================================
 # CONTROLE DE ATUALIZAÇÕES AUTOMÁTICAS (AUTO-UPDATER VIA GITHUB RELEASES)
 # ==============================================================================
-# O servidor agora lê a versão e o link diretamente do painel do Render!
-CURRENT_APP_VERSION = float(os.environ.get("LATEST_APP_VERSION", "5.0"))
-DOWNLOAD_URL = os.environ.get("UPDATE_DOWNLOAD_URL", "") 
-
 @app.route('/check-update', methods=['GET'])
 def check_update():
+    CURRENT_APP_VERSION = float(os.environ.get("LATEST_APP_VERSION", "5.0"))
+    DOWNLOAD_URL = os.environ.get("UPDATE_DOWNLOAD_URL", "") 
     return jsonify({
         "latest_version": CURRENT_APP_VERSION,
         "download_url": DOWNLOAD_URL,
@@ -49,13 +47,12 @@ def check_update():
 # ==============================================================================
 
 def alert_admin(provider_name, error_msg):
-    """Manda uma mensagem para o Discord do dono se os créditos globais acabarem!"""
+    """Avisa o dono no Discord se os créditos das APIs acabarem."""
     if DISCORD_WEBHOOK_URL:
         try:
-            msg = f"🚨 **ALERTA DE SAAS (FALTA DE CRÉDITOS)** 🚨\nO provedor **{provider_name}** recusou uma requisição (possível falta de limite/saldo)!\n**Erro:** `{error_msg}`\n⚠️ Providencie um upgrade de plano neste provedor para os clientes não ficarem esperando!"
+            msg = f"🚨 **ALERTA DE SAAS (FALTA DE CRÉDITOS)** 🚨\nO provedor **{provider_name}** recusou uma requisição!\n**Erro:** `{error_msg}`"
             requests.post(DISCORD_WEBHOOK_URL, json={"content": msg}, timeout=5)
         except: pass
-# --------------------------------------------------
 
 def log(msg):
     print(msg, file=sys.stdout, flush=True)
@@ -64,22 +61,28 @@ def verify_gumroad(license_key):
     url = "https://api.gumroad.com/v2/licenses/verify"
     headers = {"User-Agent": "Mozilla/5.0"}
     
-    for permalink in PERMALINKS:
-        payload = {"product_permalink": permalink, "license_key": license_key.strip(), "increment_uses_count": "false"}
+    last_error = "Chave inválida ou não encontrada."
+
+    for prod in GUMROAD_PRODUCTS:
+        payload = {prod["type"]: prod["value"], "license_key": license_key.strip(), "increment_uses_count": "false"}
         try:
             response = requests.post(url, data=payload, headers=headers)
             data = response.json()
+            
             if data.get("success"):
                 purchase = data.get("purchase", {})
-                variant = purchase.get("variants", "")
-                product_name = purchase.get("product_name", "")
                 
-                # A mágica: Ele detecta se é standard ou premium pelo nome que você deu na variante lá no Gumroad!
+                # --- LEITURA ULTRA-PRECISA DO PLANO (Lida com Membresias e Produtos Normais) ---
+                variant = str(purchase.get("variants", "")).lower()
+                product_name = str(purchase.get("product_name", "")).lower()
+                tier = str(purchase.get("tier", "")).lower() 
+                
                 plan = "free"
-                if "Standard" in variant or "Standard" in product_name: plan = "standard"
-                if "Premium" in variant or "Premium" in product_name: plan = "premium"
+                if "standard" in variant or "standard" in product_name or "standard" in tier: 
+                    plan = "standard"
+                if "premium" in variant or "premium" in product_name or "premium" in tier: 
+                    plan = "premium"
                 
-                # --- MATEMÁTICA DE DATAS (Ciclos Padrão e Dias de Vida) ---
                 created_at_str = purchase.get("created_at", "")
                 days_diff = 0
                 current_cycle = 0
@@ -93,10 +96,12 @@ def verify_gumroad(license_key):
                         log(f"Erro de data: {e}")
                 
                 return {"valid": True, "plan": plan, "current_cycle": current_cycle, "days_diff": days_diff}
+            else:
+                last_error = data.get("message", "Chave inválida ou não encontrada.")
         except Exception:
             continue
             
-    return {"valid": False, "reason": "Chave inválida ou não encontrada."}
+    return {"valid": False, "reason": last_error}
 
 @app.route('/check-license', methods=['POST'])
 def check_license():
@@ -118,12 +123,10 @@ def check_license():
     else:
         if machine_id: active_sessions[clean_key] = machine_id
         
-    # Variáveis do Plano Principal
     plan = main_res["plan"]
     current_cycle = main_res["current_cycle"]
     base_limit = 10000 if plan == "premium" else (5000 if plan == "standard" else 0)
     
-    # --- MÁGICA DA RECARGA (ADD-ONS ESPORÁDICOS) ---
     bonus_limit = 0
     valid_addons = 0
     
@@ -132,7 +135,6 @@ def check_license():
         if not ak: continue
         ak_res = verify_gumroad(ak)
         if ak_res["valid"]:
-            # Só soma o bônus se a chave foi comprada há menos de 30 dias!
             if ak_res["days_diff"] <= 30:
                 bonus = 10000 if ak_res["plan"] == "premium" else 5000
                 bonus_limit += bonus
