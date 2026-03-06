@@ -41,21 +41,20 @@ def verify_gumroad(license_key):
             if "Standard" in variant or "Standard" in product_name: plan = "standard"
             if "Premium" in variant or "Premium" in product_name: plan = "premium"
             
-            # --- A MÁGICA DO CICLO DE 30 DIAS ---
+            # --- MATEMÁTICA DE DATAS (Ciclos Padrão e Dias de Vida) ---
             created_at_str = purchase.get("created_at", "")
+            days_diff = 0
             current_cycle = 0
             if created_at_str:
                 try:
-                    # Pega a data de compra e calcula quantos ciclos de 30 dias já se passaram
                     created_dt = datetime.strptime(created_at_str[:19], "%Y-%m-%dT%H:%M:%S")
                     now_dt = datetime.utcnow()
                     days_diff = (now_dt - created_dt).days
                     current_cycle = max(0, days_diff // 30)
                 except Exception as e:
-                    log(f"Erro ao calcular data: {e}")
-            # -------------------------------------
-
-            return {"valid": True, "plan": plan, "current_cycle": current_cycle}
+                    log(f"Erro de data: {e}")
+            
+            return {"valid": True, "plan": plan, "current_cycle": current_cycle, "days_diff": days_diff}
         return {"valid": False, "reason": data.get("message", "Unknown Error")}
     except Exception as e:
         return {"valid": False, "reason": str(e)}
@@ -64,13 +63,14 @@ def verify_gumroad(license_key):
 def check_license():
     data = request.json
     raw_key = data.get("license_key", "")
+    addon_keys = data.get("addon_keys", []) # Lista de chaves de recarga
     machine_id = data.get("machine_id")
     
     if not raw_key: return jsonify({"active": False, "message": "No key provided"}), 400
     
-    gumroad_result = verify_gumroad(raw_key)
-    if not gumroad_result["valid"]: 
-        return jsonify({"active": False, "message": gumroad_result['reason']}), 401
+    main_res = verify_gumroad(raw_key)
+    if not main_res["valid"]: 
+        return jsonify({"active": False, "message": main_res['reason']}), 401
         
     clean_key = raw_key.strip()
     if clean_key in active_sessions:
@@ -79,11 +79,33 @@ def check_license():
     else:
         if machine_id: active_sessions[clean_key] = machine_id
         
-    # Agora o servidor envia o "Ciclo de Faturação" para o cliente
+    # Variáveis do Plano Principal
+    plan = main_res["plan"]
+    current_cycle = main_res["current_cycle"]
+    base_limit = 10000 if plan == "premium" else (5000 if plan == "standard" else 0)
+    
+    # --- MÁGICA DA RECARGA (ADD-ONS ESPORÁDICOS) ---
+    bonus_limit = 0
+    valid_addons = 0
+    
+    for ak in addon_keys:
+        ak = ak.strip()
+        if not ak: continue
+        ak_res = verify_gumroad(ak)
+        if ak_res["valid"]:
+            # Só soma o bônus se a chave foi comprada há menos de 30 dias!
+            if ak_res["days_diff"] <= 30:
+                bonus = 10000 if ak_res["plan"] == "premium" else 5000
+                bonus_limit += bonus
+                valid_addons += 1
+
     return jsonify({
         "active": True, 
-        "plan": gumroad_result['plan'], 
-        "current_cycle": gumroad_result['current_cycle']
+        "plan": plan, 
+        "current_cycle": current_cycle,
+        "base_limit": base_limit,
+        "bonus_limit": bonus_limit,
+        "valid_addons": valid_addons
     })
 
 @app.route('/credits', methods=['POST'])
@@ -108,11 +130,7 @@ def transcribe_audio():
     url = "https://api.groq.com/openai/v1/audio/transcriptions"
     headers = {"Authorization": f"Bearer {GROQ_KEY}"}
     files = {"file": (file.filename, file.read(), "audio/mpeg")}
-    data = {
-        "model": "whisper-large-v3", 
-        "language": "en",
-        "prompt": "Damn, fuck, shit, bitch, motherfucker, cunt, asshole, crap, hell."
-    }
+    data = {"model": "whisper-large-v3", "language": "en", "prompt": "Damn, fuck, shit, bitch, motherfucker, cunt, asshole, crap, hell."}
     response = requests.post(url, headers=headers, files=files, data=data)
     return jsonify(response.json()), response.status_code
 
