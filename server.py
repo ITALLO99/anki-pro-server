@@ -6,31 +6,25 @@ import re
 
 app = Flask(__name__)
 
-# ==============================================================================
-# CONFIGURAÇÕES E VARIÁVEIS DE AMBIENTE (Segurança)
-# ==============================================================================
 PRODUCT_ID = "6Nm28bZgTFYl9u1nlijDBA==" 
 active_sessions = {} 
 
-# O servidor puxa as chaves do painel do Render
-GROQ_KEY = os.environ.get("GROQ_API_KEY", "")
-DEEPL_KEY = os.environ.get("DEEPL_API_KEY", "")
-AZURE_KEY = os.environ.get("AZURE_SPEECH_KEY", "")
-AZURE_REGION = os.environ.get("AZURE_SPEECH_REGION", "brazilsouth")
-ELEVEN_KEY = os.environ.get("ELEVENLABS_API_KEY", "")
-ELEVEN_KEY_2 = os.environ.get("ELEVENLABS_API_KEY_2", "") # Nova chave para o ElevenLabs 2
-PLAYHT_KEY = os.environ.get("PLAY_HT_API_KEY", "")
-PLAYHT_USER = os.environ.get("PLAY_HT_USER_ID", "")
-WELLSAID_KEY = os.environ.get("WELL_SAID_LABS_API_KEY", "")
-CARTESIA_KEY = os.environ.get("CARTESIA_API_KEY", "")
-HF_KEY = os.environ.get("HF_API_KEY", "")
+# --- A BLINDAGEM (.strip() remove qualquer espaço invisível colado sem querer no Render) ---
+GROQ_KEY = os.environ.get("GROQ_API_KEY", "").strip()
+DEEPL_KEY = os.environ.get("DEEPL_API_KEY", "").strip()
+AZURE_KEY = os.environ.get("AZURE_SPEECH_KEY", "").strip()
+AZURE_REGION = os.environ.get("AZURE_SPEECH_REGION", "brazilsouth").strip()
+ELEVEN_KEY = os.environ.get("ELEVENLABS_API_KEY", "").strip()
+ELEVEN_KEY_2 = os.environ.get("ELEVENLABS_API_KEY_2", "").strip() 
+PLAYHT_KEY = os.environ.get("PLAY_HT_API_KEY", "").strip()
+PLAYHT_USER = os.environ.get("PLAY_HT_USER_ID", "").strip()
+WELLSAID_KEY = os.environ.get("WELL_SAID_LABS_API_KEY", "").strip()
+CARTESIA_KEY = os.environ.get("CARTESIA_API_KEY", "").strip()
+HF_KEY = os.environ.get("HF_API_KEY", "").strip()
 
 def log(msg):
     print(msg, file=sys.stdout, flush=True)
 
-# ==============================================================================
-# ROTAS COMERCIAIS (GUMROAD E LICENÇAS)
-# ==============================================================================
 def verify_gumroad(license_key):
     url = "https://api.gumroad.com/v2/licenses/verify"
     payload = {"product_id": PRODUCT_ID, "license_key": license_key.strip(), "increment_uses_count": "false"}
@@ -54,20 +48,15 @@ def check_license():
     data = request.json
     raw_key = data.get("license_key", "")
     machine_id = data.get("machine_id")
-
     if not raw_key: return jsonify({"active": False, "message": "No key provided"}), 400
-
     gumroad_result = verify_gumroad(raw_key)
-    if not gumroad_result["valid"]:
-        return jsonify({"active": False, "message": gumroad_result['reason']}), 401
-
+    if not gumroad_result["valid"]: return jsonify({"active": False, "message": gumroad_result['reason']}), 401
     clean_key = raw_key.strip()
     if clean_key in active_sessions:
         if machine_id and active_sessions[clean_key] != machine_id:
              return jsonify({"active": False, "message": "Concurrent Access", "code": "CONCURRENT_ACCESS"}), 409
     else:
         if machine_id: active_sessions[clean_key] = machine_id
-
     return jsonify({"active": True, "plan": gumroad_result['plan']})
 
 @app.route('/credits', methods=['POST'])
@@ -75,10 +64,6 @@ def check_credits():
     plan = request.json.get("plan", "free")
     credits = 10000 if plan == "premium" else (5000 if plan == "standard" else 0)
     return jsonify({"remaining": credits})
-
-# ==============================================================================
-# ROTAS DE INTELIGÊNCIA ARTIFICIAL (O CÉREBRO)
-# ==============================================================================
 
 @app.route('/ai/generate', methods=['POST'])
 def ai_generate():
@@ -92,13 +77,11 @@ def ai_generate():
 def transcribe_audio():
     if not GROQ_KEY: return jsonify({"error": "Server missing Groq Key"}), 500
     if 'file' not in request.files: return jsonify({"error": "No file part"}), 400
-    
     file = request.files['file']
     url = "https://api.groq.com/openai/v1/audio/transcriptions"
     headers = {"Authorization": f"Bearer {GROQ_KEY}"}
     files = {"file": (file.filename, file.read(), "audio/mpeg")}
     data = {"model": "whisper-large-v3", "language": "en"}
-    
     response = requests.post(url, headers=headers, files=files, data=data)
     return jsonify(response.json()), response.status_code
 
@@ -111,6 +94,11 @@ def translate_deepl():
     response = requests.post(url, data=data)
     return jsonify(response.json()), response.status_code
 
+def safe_error_response(res):
+    try: err = res.json()
+    except: err = {"error": res.text}
+    return jsonify(err), res.status_code
+
 @app.route('/tts/generate', methods=['POST'])
 def tts_generate():
     data = request.json
@@ -119,48 +107,31 @@ def tts_generate():
     voice_id = data.get("voice_id", "")
 
     try:
-        # --- AZURE ---
         if provider == "azure":
             safe_text = re.sub(r'\[.*?\]', '', text).replace("&", "and")
             url = f"https://{AZURE_REGION}.tts.speech.microsoft.com/cognitiveservices/v1"
-            headers = {
-                "Ocp-Apim-Subscription-Key": AZURE_KEY,
-                "Content-Type": "application/ssml+xml",
-                "X-Microsoft-OutputFormat": "audio-16khz-32kbitrate-mono-mp3",
-                "User-Agent": "AnkiProServer"
-            }
+            headers = {"Ocp-Apim-Subscription-Key": AZURE_KEY, "Content-Type": "application/ssml+xml", "X-Microsoft-OutputFormat": "audio-16khz-32kbitrate-mono-mp3", "User-Agent": "AnkiProServer"}
             locale = "-".join(voice_id.split("-")[:2]) if "-" in voice_id else "en-US"
-            
-            if "<mstts:express-as" in safe_text:
-                body = f"<speak version='1.0' xml:lang='{locale}'><voice xml:lang='{locale}' name='{voice_id}'>{safe_text}</voice></speak>"
-            else:
-                body = f"<speak version='1.0' xml:lang='{locale}'><voice name='{voice_id}'>{safe_text}</voice></speak>"
-            
+            if "<mstts:express-as" in safe_text: body = f"<speak version='1.0' xml:lang='{locale}'><voice xml:lang='{locale}' name='{voice_id}'>{safe_text}</voice></speak>"
+            else: body = f"<speak version='1.0' xml:lang='{locale}'><voice name='{voice_id}'>{safe_text}</voice></speak>"
             res = requests.post(url, headers=headers, data=body.encode('utf-8'))
             if res.status_code == 200: return Response(res.content, mimetype="audio/mpeg")
-            else: return jsonify({"error": res.text}), res.status_code
+            else: return safe_error_response(res)
 
-        # --- ELEVENLABS 1 e 2 ---
         elif provider in ["elevenlabs", "elevenlabs2"]:
             key_to_use = ELEVEN_KEY_2 if provider == "elevenlabs2" else ELEVEN_KEY
             if not key_to_use: return jsonify({"error": f"Server missing Key for {provider}"}), 500
-            
             url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
             headers = {"xi-api-key": key_to_use, "Content-Type": "application/json"}
-            
-            # CORREÇÃO CRÍTICA DO MODELO: "eleven_multilingual_v2"
             payload = {"text": text, "model_id": "eleven_multilingual_v2"}
-            
             res = requests.post(url, json=payload, headers=headers)
             if res.status_code == 200: return Response(res.content, mimetype="audio/mpeg")
-            else: return jsonify({"error": res.text}), res.status_code
+            else: return safe_error_response(res)
 
-        # --- CARTESIA ---
         elif provider == "cartesia":
             if not CARTESIA_KEY: return jsonify({"error": "Server missing Cartesia Key"}), 500
             url = "https://api.cartesia.ai/tts/bytes"
             headers = {"Cartesia-Version": "2024-06-10", "X-API-Key": CARTESIA_KEY, "Content-Type": "application/json"}
-            
             emo_api = None
             match = re.search(r'<emotion value="([^"]+)"', text)
             if match:
@@ -170,52 +141,39 @@ def tts_generate():
                 elif any(x in raw_emo for x in ["curio", "myst"]): emo_api = "curiosity"
                 elif any(x in raw_emo for x in ["surpris", "amaz"]): emo_api = "surprise"
                 else: emo_api = "positivity"
-            
             clean_transcript = re.sub(r'<[^>]+>', '', text).strip().replace("[laughter]", "")
-            
-            payload = {
-                "model_id": "sonic-english",
-                "transcript": clean_transcript,
-                "voice": {"mode": "id", "id": voice_id},
-                "output_format": {"container": "mp3", "encoding": "mp3", "sample_rate": 44100}
-            }
+            payload = {"model_id": "sonic-english", "transcript": clean_transcript, "voice": {"mode": "id", "id": voice_id}, "output_format": {"container": "mp3", "encoding": "mp3", "sample_rate": 44100}}
             if emo_api: payload["voice"]["__experimental_controls"] = {"emotion": [f"{emo_api}:high"]}
-            
             res = requests.post(url, headers=headers, json=payload)
             if res.status_code == 200: return Response(res.content, mimetype="audio/mpeg")
-            else: return jsonify({"error": res.text}), res.status_code
+            else: return safe_error_response(res)
 
-        # --- PLAYHT ---
         elif provider == "playht":
             url = "https://api.play.ht/api/v2/tts/stream"
             headers = {"AUTHORIZATION": PLAYHT_KEY, "X-USER-ID": PLAYHT_USER, "accept": "audio/mpeg", "content-type": "application/json"}
             payload = {"text": text, "voice": voice_id, "output_format": "mp3"}
             res = requests.post(url, headers=headers, json=payload)
             if res.status_code == 200: return Response(res.content, mimetype="audio/mpeg")
+            else: return safe_error_response(res)
 
-        # --- WELLSAID LABS ---
         elif provider == "wellsaid":
             url = "https://api.wellsaidlabs.com/v1/tts/stream"
             headers = {"X-Api-Key": WELLSAID_KEY, "Accept": "audio/mpeg", "Content-Type": "application/json"}
             payload = {"text": text, "speaker_avatar_id": voice_id}
             res = requests.post(url, headers=headers, json=payload)
             if res.status_code == 200: return Response(res.content, mimetype="audio/mpeg")
+            else: return safe_error_response(res)
 
-        # --- COQUI XTTS (Hugging Face) ---
         elif provider == "coquixtts":
             url = f"https://api-inference.huggingface.co/models/{voice_id}"
             headers = {"Authorization": f"Bearer {HF_KEY}", "Content-Type": "application/json"}
             res = requests.post(url, headers=headers, json={"inputs": text}, timeout=25)
             if res.status_code == 200: return Response(res.content, mimetype="audio/wav")
+            else: return safe_error_response(res)
             
         return jsonify({"error": f"Provider {provider} failed or invalid."}), 500
-        
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-
-@app.route('/')
-def home():
-    return "Anki Pro Central Server v3.0 - Active (Fixed Models & Fallbacks)"
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
