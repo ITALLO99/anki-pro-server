@@ -198,6 +198,12 @@ def tts_generate():
             payload = {"text": text, "speaker_avatar_id": voice_id}
             res = requests.post(url, headers=headers, json=payload)
             if res.status_code == 200: return Response(res.content, mimetype="audio/mpeg")
+         # --- COQUI XTTS (Hugging Face) ---
+        elif provider == "coquixtts":
+            url = f"https://api-inference.huggingface.co/models/{voice_id}"
+            headers = {"Authorization": f"Bearer {HF_KEY}", "Content-Type": "application/json"}
+            res = requests.post(url, headers=headers, json={"inputs": text}, timeout=25)
+            if res.status_code == 200: return Response(res.content, mimetype="audio/wav")       
             
         return jsonify({"error": f"Provider {provider} failed or invalid."}), 500
         
@@ -211,3 +217,4 @@ def home():
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
     app.run(host='0.0.0.0', port=port)
+
