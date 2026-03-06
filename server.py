@@ -7,7 +7,13 @@ from datetime import datetime
 
 app = Flask(__name__)
 
-PRODUCT_ID = "6Nm28bZgTFYl9u1nlijDBA==" 
+# --- OS SEUS 3 PRODUTOS DO GUMROAD ---
+PERMALINKS = [
+    "kybfx",      # Plano Mensal
+    "toreea",     # Acesso Vitalício
+    "nuixna"      # Add-ons (Créditos IA)
+]
+
 active_sessions = {} 
 
 GROQ_KEY = os.environ.get("GROQ_API_KEY", "").strip()
@@ -22,71 +28,87 @@ WELLSAID_KEY = os.environ.get("WELL_SAID_LABS_API_KEY", "").strip()
 CARTESIA_KEY = os.environ.get("CARTESIA_API_KEY", "").strip()
 HF_KEY = os.environ.get("HF_API_KEY", "").strip()
 
-# --- NOVO: WEBHOOK PARA AVISAR O CEO NO CELULAR ---
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL", "").strip()
 
-def alert_admin(provider_name, error_msg):
-    """Manda uma mensagem para o Discord do dono se os créditos globais acabarem!"""
-    if DISCORD_WEBHOOK_URL:
-        try:
-            msg = f"🚨 **ALERTA DE SAAS (FALTA DE CRÉDITOS)** 🚨\nO provedor **{provider_name}** recusou uma requisição (possível falta de limite/saldo)!\n**Erro:** `{error_msg}`\n⚠️ Providencie um upgrade de plano neste provedor para os clientes não ficarem esperando!"
-            requests.post(DISCORD_WEBHOOK_URL, json={"content": msg}, timeout=5)
-        except: pass
-# --------------------------------------------------
-
-def log(msg):
-    print(msg, file=sys.stdout, flush=True)
-
-def verify_gumroad(license_key):
-    url = "https://api.gumroad.com/v2/licenses/verify"
-    payload = {"product_id": PRODUCT_ID, "license_key": license_key.strip(), "increment_uses_count": "false"}
-    headers = {"User-Agent": "Mozilla/5.0"}
-    try:
-        response = requests.post(url, data=payload, headers=headers)
-        data = response.json()
-        if data.get("success"):
-            purchase = data.get("purchase", {})
-            variant = purchase.get("variants", "")
-            product_name = purchase.get("product_name", "")
-            
-            plan = "free"
-            if "Standard" in variant or "Standard" in product_name: plan = "standard"
-            if "Premium" in variant or "Premium" in product_name: plan = "premium"
-            
-            created_at_str = purchase.get("created_at", "")
-            days_diff = 0
-            current_cycle = 0
-            if created_at_str:
-                try:
-                    created_dt = datetime.strptime(created_at_str[:19], "%Y-%m-%dT%H:%M:%S")
-                    now_dt = datetime.utcnow()
-                    days_diff = (now_dt - created_dt).days
-                    current_cycle = max(0, days_diff // 30)
-                except Exception as e:
-                    log(f"Erro de data: {e}")
-            
-            return {"valid": True, "plan": plan, "current_cycle": current_cycle, "days_diff": days_diff}
-        return {"valid": False, "reason": data.get("message", "Unknown Error")}
-    except Exception as e:
-        return {"valid": False, "reason": str(e)}
-
-
 # ==============================================================================
-# CONTROLE DE ATUALIZAÇÕES AUTOMÁTICAS (AUTO-UPDATER)
+# CONTROLE DE ATUALIZAÇÕES AUTOMÁTICAS (AUTO-UPDATER VIA GITHUB RELEASES)
 # ==============================================================================
-# Quando você compilar uma versão nova, mude este número e coloque o link do novo .exe
-CURRENT_APP_VERSION = 5.0 
-# Sugestão: Upe o seu .exe atualizado no Google Drive (gere um link direto) ou no GitHub Releases
-DOWNLOAD_URL = "https://link-direto-para-seu-novo-arquivo.com/AnkiPro.exe" 
+CURRENT_APP_VERSION = float(os.environ.get("LATEST_APP_VERSION", "5.0"))
+DOWNLOAD_URL = os.environ.get("UPDATE_DOWNLOAD_URL", "") 
 
 @app.route('/check-update', methods=['GET'])
 def check_update():
     return jsonify({
         "latest_version": CURRENT_APP_VERSION,
         "download_url": DOWNLOAD_URL,
-        "release_notes": "Pequenas correções de bugs e novas vozes adicionadas!"
+        "release_notes": "Uma nova atualização obrigatória está disponível com melhorias de estabilidade e novas funcionalidades!"
     })
-# ==============================================================================        
+# ==============================================================================
+
+def alert_admin(provider_name, error_msg):
+    if DISCORD_WEBHOOK_URL:
+        try:
+            msg = f"🚨 **ALERTA DE SAAS (FALTA DE CRÉDITOS)** 🚨\nO provedor **{provider_name}** recusou uma requisição!\n**Erro:** `{error_msg}`"
+            requests.post(DISCORD_WEBHOOK_URL, json={"content": msg}, timeout=5)
+        except: pass
+
+def log(msg):
+    print(msg, file=sys.stdout, flush=True)
+
+def verify_gumroad(license_key):
+    url = "https://api.gumroad.com/v2/licenses/verify"
+    headers = {"User-Agent": "Mozilla/5.0"}
+    
+    for permalink in PERMALINKS:
+        payload = {"product_permalink": permalink, "license_key": license_key.strip(), "increment_uses_count": "false"}
+        try:
+            response = requests.post(url, data=payload, headers=headers)
+            data = response.json()
+            if data.get("success"):
+                purchase = data.get("purchase", {})
+                variant = purchase.get("variants", "")
+                product_name = purchase.get("product_name", "")
+                
+                plan = "free"
+                if "Standard" in variant or "Standard" in product_name: plan = "standard"
+                if "Premium" in variant or "Premium" in product_name: plan = "premium"
+                
+                created_at_str = purchase.get("created_at", "")
+                days_diff = 0
+                current_cycle = 0
+                if created_at_str:
+                    try:
+                        created_dt = datetime.strptime(created_at_str[:19], "%Y-%m-%dT%H:%M:%S")
+                        now_dt = datetime.utcnow()
+                        days_diff = (now_dt - created_dt).days
+                        current_cycle = max(0, days_diff // 30)
+                    except Exception as e:
+                        log(f"Erro de data: {e}")
+                
+                return {"valid": True, "plan": plan, "current_cycle": current_cycle, "days_diff": days_diff}
+        except Exception:
+            continue
+            
+    return {"valid": False, "reason": "Chave inválida ou não encontrada."}
+
+# ... (MANTENHA O RESTO DO SEU SERVER.PY INTACTO A PARTIR DAQUI: @app.route('/check-license', methods=['POST']) ) ...
+
+
+# ==============================================================================
+# CONTROLE DE ATUALIZAÇÕES AUTOMÁTICAS (AUTO-UPDATER VIA GITHUB RELEASES)
+# ==============================================================================
+# O servidor agora lê a versão e o link diretamente do painel do Render!
+CURRENT_APP_VERSION = float(os.environ.get("LATEST_APP_VERSION", "5.0"))
+DOWNLOAD_URL = os.environ.get("UPDATE_DOWNLOAD_URL", "") 
+
+@app.route('/check-update', methods=['GET'])
+def check_update():
+    return jsonify({
+        "latest_version": CURRENT_APP_VERSION,
+        "download_url": DOWNLOAD_URL,
+        "release_notes": "Uma nova atualização obrigatória está disponível com melhorias de estabilidade e novas funcionalidades!"
+    })
+# ==============================================================================      
 
 @app.route('/check-license', methods=['POST'])
 def check_license():
@@ -258,4 +280,5 @@ def tts_generate():
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
     app.run(host='0.0.0.0', port=port)
+
 
