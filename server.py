@@ -70,6 +70,24 @@ def verify_gumroad(license_key):
     except Exception as e:
         return {"valid": False, "reason": str(e)}
 
+
+# ==============================================================================
+# CONTROLE DE ATUALIZAÇÕES AUTOMÁTICAS (AUTO-UPDATER)
+# ==============================================================================
+# Quando você compilar uma versão nova, mude este número e coloque o link do novo .exe
+CURRENT_APP_VERSION = 5.0 
+# Sugestão: Upe o seu .exe atualizado no Google Drive (gere um link direto) ou no GitHub Releases
+DOWNLOAD_URL = "https://link-direto-para-seu-novo-arquivo.com/AnkiPro.exe" 
+
+@app.route('/check-update', methods=['GET'])
+def check_update():
+    return jsonify({
+        "latest_version": CURRENT_APP_VERSION,
+        "download_url": DOWNLOAD_URL,
+        "release_notes": "Pequenas correções de bugs e novas vozes adicionadas!"
+    })
+# ==============================================================================        
+
 @app.route('/check-license', methods=['POST'])
 def check_license():
     data = request.json
@@ -240,3 +258,4 @@ def tts_generate():
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
     app.run(host='0.0.0.0', port=port)
+
