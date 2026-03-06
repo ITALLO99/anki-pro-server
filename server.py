@@ -22,6 +22,18 @@ WELLSAID_KEY = os.environ.get("WELL_SAID_LABS_API_KEY", "").strip()
 CARTESIA_KEY = os.environ.get("CARTESIA_API_KEY", "").strip()
 HF_KEY = os.environ.get("HF_API_KEY", "").strip()
 
+# --- NOVO: WEBHOOK PARA AVISAR O CEO NO CELULAR ---
+DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL", "").strip()
+
+def alert_admin(provider_name, error_msg):
+    """Manda uma mensagem para o Discord do dono se os créditos globais acabarem!"""
+    if DISCORD_WEBHOOK_URL:
+        try:
+            msg = f"🚨 **ALERTA DE SAAS (FALTA DE CRÉDITOS)** 🚨\nO provedor **{provider_name}** recusou uma requisição (possível falta de limite/saldo)!\n**Erro:** `{error_msg}`\n⚠️ Providencie um upgrade de plano neste provedor para os clientes não ficarem esperando!"
+            requests.post(DISCORD_WEBHOOK_URL, json={"content": msg}, timeout=5)
+        except: pass
+# --------------------------------------------------
+
 def log(msg):
     print(msg, file=sys.stdout, flush=True)
 
@@ -41,7 +53,6 @@ def verify_gumroad(license_key):
             if "Standard" in variant or "Standard" in product_name: plan = "standard"
             if "Premium" in variant or "Premium" in product_name: plan = "premium"
             
-            # --- MATEMÁTICA DE DATAS (Ciclos Padrão e Dias de Vida) ---
             created_at_str = purchase.get("created_at", "")
             days_diff = 0
             current_cycle = 0
@@ -63,14 +74,13 @@ def verify_gumroad(license_key):
 def check_license():
     data = request.json
     raw_key = data.get("license_key", "")
-    addon_keys = data.get("addon_keys", []) # Lista de chaves de recarga
+    addon_keys = data.get("addon_keys", []) 
     machine_id = data.get("machine_id")
     
     if not raw_key: return jsonify({"active": False, "message": "No key provided"}), 400
     
     main_res = verify_gumroad(raw_key)
-    if not main_res["valid"]: 
-        return jsonify({"active": False, "message": main_res['reason']}), 401
+    if not main_res["valid"]: return jsonify({"active": False, "message": main_res['reason']}), 401
         
     clean_key = raw_key.strip()
     if clean_key in active_sessions:
@@ -79,12 +89,10 @@ def check_license():
     else:
         if machine_id: active_sessions[clean_key] = machine_id
         
-    # Variáveis do Plano Principal
     plan = main_res["plan"]
     current_cycle = main_res["current_cycle"]
     base_limit = 10000 if plan == "premium" else (5000 if plan == "standard" else 0)
     
-    # --- MÁGICA DA RECARGA (ADD-ONS ESPORÁDICOS) ---
     bonus_limit = 0
     valid_addons = 0
     
@@ -92,21 +100,12 @@ def check_license():
         ak = ak.strip()
         if not ak: continue
         ak_res = verify_gumroad(ak)
-        if ak_res["valid"]:
-            # Só soma o bônus se a chave foi comprada há menos de 30 dias!
-            if ak_res["days_diff"] <= 30:
-                bonus = 10000 if ak_res["plan"] == "premium" else 5000
-                bonus_limit += bonus
-                valid_addons += 1
+        if ak_res["valid"] and ak_res["days_diff"] <= 30:
+            bonus = 10000 if ak_res["plan"] == "premium" else 5000
+            bonus_limit += bonus
+            valid_addons += 1
 
-    return jsonify({
-        "active": True, 
-        "plan": plan, 
-        "current_cycle": current_cycle,
-        "base_limit": base_limit,
-        "bonus_limit": bonus_limit,
-        "valid_addons": valid_addons
-    })
+    return jsonify({"active": True, "plan": plan, "current_cycle": current_cycle, "base_limit": base_limit, "bonus_limit": bonus_limit, "valid_addons": valid_addons})
 
 @app.route('/credits', methods=['POST'])
 def check_credits():
@@ -114,12 +113,19 @@ def check_credits():
     credits = 10000 if plan == "premium" else (5000 if plan == "standard" else 0)
     return jsonify({"remaining": credits})
 
+def handle_ai_error(res, provider):
+    err_text = res.text.lower()
+    if any(x in err_text for x in ["quota", "exceeded", "insufficient", "limit", "unusual activity", "balance", "payment"]):
+        alert_admin(provider, res.text)
+    return jsonify({"error": res.text}), res.status_code
+
 @app.route('/ai/generate', methods=['POST'])
 def ai_generate():
     if not GROQ_KEY: return jsonify({"error": "Server missing Groq Key"}), 500
     url = "https://api.groq.com/openai/v1/chat/completions"
     headers = {"Authorization": f"Bearer {GROQ_KEY}", "Content-Type": "application/json"}
     response = requests.post(url, headers=headers, json=request.json)
+    if response.status_code != 200: return handle_ai_error(response, "Groq AI (Texto)")
     return jsonify(response.json()), response.status_code
 
 @app.route('/transcribe', methods=['POST'])
@@ -132,6 +138,7 @@ def transcribe_audio():
     files = {"file": (file.filename, file.read(), "audio/mpeg")}
     data = {"model": "whisper-large-v3", "language": "en", "prompt": "Damn, fuck, shit, bitch, motherfucker, cunt, asshole, crap, hell."}
     response = requests.post(url, headers=headers, files=files, data=data)
+    if response.status_code != 200: return handle_ai_error(response, "Groq Whisper (Áudio)")
     return jsonify(response.json()), response.status_code
 
 @app.route('/translate/deepl', methods=['POST'])
@@ -141,11 +148,17 @@ def translate_deepl():
     url = "https://api-free.deepl.com/v2/translate"
     data = {'auth_key': DEEPL_KEY, 'text': text, 'source_lang': 'EN', 'target_lang': 'PT'}
     response = requests.post(url, data=data)
+    if response.status_code != 200: return handle_ai_error(response, "DeepL Translator")
     return jsonify(response.json()), response.status_code
 
-def safe_error_response(res):
+def safe_tts_error(res, provider):
     try: err = res.json()
     except: err = {"error": res.text}
+    
+    err_str = str(err).lower()
+    if any(x in err_str for x in ["quota", "exceeded", "insufficient", "limit", "unusual activity", "balance", "payment"]):
+        alert_admin(provider, str(err))
+        
     return jsonify(err), res.status_code
 
 @app.route('/tts/generate', methods=['POST'])
@@ -165,7 +178,7 @@ def tts_generate():
             else: body = f"<speak version='1.0' xml:lang='{locale}'><voice name='{voice_id}'>{safe_text}</voice></speak>"
             res = requests.post(url, headers=headers, data=body.encode('utf-8'))
             if res.status_code == 200: return Response(res.content, mimetype="audio/mpeg")
-            else: return safe_error_response(res)
+            else: return safe_tts_error(res, "Azure TTS")
 
         elif provider in ["elevenlabs", "elevenlabs2"]:
             key_to_use = ELEVEN_KEY_2 if provider == "elevenlabs2" else ELEVEN_KEY
@@ -175,7 +188,7 @@ def tts_generate():
             payload = {"text": text, "model_id": "eleven_multilingual_v2"}
             res = requests.post(url, json=payload, headers=headers)
             if res.status_code == 200: return Response(res.content, mimetype="audio/mpeg")
-            else: return safe_error_response(res)
+            else: return safe_tts_error(res, provider.upper())
 
         elif provider == "cartesia":
             if not CARTESIA_KEY: return jsonify({"error": "Server missing Cartesia Key"}), 500
@@ -195,7 +208,7 @@ def tts_generate():
             if emo_api: payload["voice"]["__experimental_controls"] = {"emotion": [f"{emo_api}:high"]}
             res = requests.post(url, headers=headers, json=payload)
             if res.status_code == 200: return Response(res.content, mimetype="audio/mpeg")
-            else: return safe_error_response(res)
+            else: return safe_tts_error(res, "Cartesia")
 
         elif provider == "playht":
             url = "https://api.play.ht/api/v2/tts/stream"
@@ -203,7 +216,7 @@ def tts_generate():
             payload = {"text": text, "voice": voice_id, "output_format": "mp3"}
             res = requests.post(url, headers=headers, json=payload)
             if res.status_code == 200: return Response(res.content, mimetype="audio/mpeg")
-            else: return safe_error_response(res)
+            else: return safe_tts_error(res, "PlayHT")
 
         elif provider == "wellsaid":
             url = "https://api.wellsaidlabs.com/v1/tts/stream"
@@ -211,14 +224,14 @@ def tts_generate():
             payload = {"text": text, "speaker_avatar_id": voice_id}
             res = requests.post(url, headers=headers, json=payload)
             if res.status_code == 200: return Response(res.content, mimetype="audio/mpeg")
-            else: return safe_error_response(res)
+            else: return safe_tts_error(res, "WellSaid Labs")
 
         elif provider == "coquixtts":
             url = f"https://api-inference.huggingface.co/models/{voice_id}"
             headers = {"Authorization": f"Bearer {HF_KEY}", "Content-Type": "application/json"}
             res = requests.post(url, headers=headers, json={"inputs": text}, timeout=25)
             if res.status_code == 200: return Response(res.content, mimetype="audio/wav")
-            else: return safe_error_response(res)
+            else: return safe_tts_error(res, "Coqui (HuggingFace)")
             
         return jsonify({"error": f"Provider {provider} failed or invalid."}), 500
     except Exception as e:
