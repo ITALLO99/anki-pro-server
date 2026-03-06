@@ -3,13 +3,13 @@ import requests
 import os
 import sys
 import re
+from datetime import datetime
 
 app = Flask(__name__)
 
 PRODUCT_ID = "6Nm28bZgTFYl9u1nlijDBA==" 
 active_sessions = {} 
 
-# --- A BLINDAGEM (.strip() remove qualquer espaço invisível colado sem querer no Render) ---
 GROQ_KEY = os.environ.get("GROQ_API_KEY", "").strip()
 DEEPL_KEY = os.environ.get("DEEPL_API_KEY", "").strip()
 AZURE_KEY = os.environ.get("AZURE_SPEECH_KEY", "").strip()
@@ -33,12 +33,29 @@ def verify_gumroad(license_key):
         response = requests.post(url, data=payload, headers=headers)
         data = response.json()
         if data.get("success"):
-            variant = data["purchase"].get("variants", "")
-            product_name = data["purchase"].get("product_name", "")
+            purchase = data.get("purchase", {})
+            variant = purchase.get("variants", "")
+            product_name = purchase.get("product_name", "")
+            
             plan = "free"
             if "Standard" in variant or "Standard" in product_name: plan = "standard"
             if "Premium" in variant or "Premium" in product_name: plan = "premium"
-            return {"valid": True, "plan": plan}
+            
+            # --- A MÁGICA DO CICLO DE 30 DIAS ---
+            created_at_str = purchase.get("created_at", "")
+            current_cycle = 0
+            if created_at_str:
+                try:
+                    # Pega a data de compra e calcula quantos ciclos de 30 dias já se passaram
+                    created_dt = datetime.strptime(created_at_str[:19], "%Y-%m-%dT%H:%M:%S")
+                    now_dt = datetime.utcnow()
+                    days_diff = (now_dt - created_dt).days
+                    current_cycle = max(0, days_diff // 30)
+                except Exception as e:
+                    log(f"Erro ao calcular data: {e}")
+            # -------------------------------------
+
+            return {"valid": True, "plan": plan, "current_cycle": current_cycle}
         return {"valid": False, "reason": data.get("message", "Unknown Error")}
     except Exception as e:
         return {"valid": False, "reason": str(e)}
@@ -48,16 +65,26 @@ def check_license():
     data = request.json
     raw_key = data.get("license_key", "")
     machine_id = data.get("machine_id")
+    
     if not raw_key: return jsonify({"active": False, "message": "No key provided"}), 400
+    
     gumroad_result = verify_gumroad(raw_key)
-    if not gumroad_result["valid"]: return jsonify({"active": False, "message": gumroad_result['reason']}), 401
+    if not gumroad_result["valid"]: 
+        return jsonify({"active": False, "message": gumroad_result['reason']}), 401
+        
     clean_key = raw_key.strip()
     if clean_key in active_sessions:
         if machine_id and active_sessions[clean_key] != machine_id:
              return jsonify({"active": False, "message": "Concurrent Access", "code": "CONCURRENT_ACCESS"}), 409
     else:
         if machine_id: active_sessions[clean_key] = machine_id
-    return jsonify({"active": True, "plan": gumroad_result['plan']})
+        
+    # Agora o servidor envia o "Ciclo de Faturação" para o cliente
+    return jsonify({
+        "active": True, 
+        "plan": gumroad_result['plan'], 
+        "current_cycle": gumroad_result['current_cycle']
+    })
 
 @app.route('/credits', methods=['POST'])
 def check_credits():
@@ -77,19 +104,15 @@ def ai_generate():
 def transcribe_audio():
     if not GROQ_KEY: return jsonify({"error": "Server missing Groq Key"}), 500
     if 'file' not in request.files: return jsonify({"error": "No file part"}), 400
-    
     file = request.files['file']
     url = "https://api.groq.com/openai/v1/audio/transcriptions"
     headers = {"Authorization": f"Bearer {GROQ_KEY}"}
     files = {"file": (file.filename, file.read(), "audio/mpeg")}
-    
-    # A MÁGICA: O prompt com palavras "proibidas" força a IA a desligar o filtro moral de asteriscos!
     data = {
         "model": "whisper-large-v3", 
         "language": "en",
         "prompt": "Damn, fuck, shit, bitch, motherfucker, cunt, asshole, crap, hell."
     }
-    
     response = requests.post(url, headers=headers, files=files, data=data)
     return jsonify(response.json()), response.status_code
 
@@ -186,4 +209,3 @@ def tts_generate():
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
     app.run(host='0.0.0.0', port=port)
-
