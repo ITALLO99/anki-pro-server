@@ -14,6 +14,7 @@ PERMALINKS = [
     "nuixna"      # Add-ons (Créditos IA)
 ]
 
+PRODUCT_ID = "6Nm28bZgTFYl9u1nlijDBA==" 
 active_sessions = {} 
 
 GROQ_KEY = os.environ.get("GROQ_API_KEY", "").strip()
@@ -28,11 +29,13 @@ WELLSAID_KEY = os.environ.get("WELL_SAID_LABS_API_KEY", "").strip()
 CARTESIA_KEY = os.environ.get("CARTESIA_API_KEY", "").strip()
 HF_KEY = os.environ.get("HF_API_KEY", "").strip()
 
+# --- NOVO: WEBHOOK PARA AVISAR O CEO NO CELULAR ---
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL", "").strip()
 
 # ==============================================================================
 # CONTROLE DE ATUALIZAÇÕES AUTOMÁTICAS (AUTO-UPDATER VIA GITHUB RELEASES)
 # ==============================================================================
+# O servidor agora lê a versão e o link diretamente do painel do Render!
 CURRENT_APP_VERSION = float(os.environ.get("LATEST_APP_VERSION", "5.0"))
 DOWNLOAD_URL = os.environ.get("UPDATE_DOWNLOAD_URL", "") 
 
@@ -46,11 +49,13 @@ def check_update():
 # ==============================================================================
 
 def alert_admin(provider_name, error_msg):
+    """Manda uma mensagem para o Discord do dono se os créditos globais acabarem!"""
     if DISCORD_WEBHOOK_URL:
         try:
-            msg = f"🚨 **ALERTA DE SAAS (FALTA DE CRÉDITOS)** 🚨\nO provedor **{provider_name}** recusou uma requisição!\n**Erro:** `{error_msg}`"
+            msg = f"🚨 **ALERTA DE SAAS (FALTA DE CRÉDITOS)** 🚨\nO provedor **{provider_name}** recusou uma requisição (possível falta de limite/saldo)!\n**Erro:** `{error_msg}`\n⚠️ Providencie um upgrade de plano neste provedor para os clientes não ficarem esperando!"
             requests.post(DISCORD_WEBHOOK_URL, json={"content": msg}, timeout=5)
         except: pass
+# --------------------------------------------------
 
 def log(msg):
     print(msg, file=sys.stdout, flush=True)
@@ -69,10 +74,12 @@ def verify_gumroad(license_key):
                 variant = purchase.get("variants", "")
                 product_name = purchase.get("product_name", "")
                 
+                # A mágica: Ele detecta se é standard ou premium pelo nome que você deu na variante lá no Gumroad!
                 plan = "free"
                 if "Standard" in variant or "Standard" in product_name: plan = "standard"
                 if "Premium" in variant or "Premium" in product_name: plan = "premium"
                 
+                # --- MATEMÁTICA DE DATAS (Ciclos Padrão e Dias de Vida) ---
                 created_at_str = purchase.get("created_at", "")
                 days_diff = 0
                 current_cycle = 0
@@ -91,25 +98,6 @@ def verify_gumroad(license_key):
             
     return {"valid": False, "reason": "Chave inválida ou não encontrada."}
 
-# ... (MANTENHA O RESTO DO SEU SERVER.PY INTACTO A PARTIR DAQUI: @app.route('/check-license', methods=['POST']) ) ...
-
-
-# ==============================================================================
-# CONTROLE DE ATUALIZAÇÕES AUTOMÁTICAS (AUTO-UPDATER VIA GITHUB RELEASES)
-# ==============================================================================
-# O servidor agora lê a versão e o link diretamente do painel do Render!
-CURRENT_APP_VERSION = float(os.environ.get("LATEST_APP_VERSION", "5.0"))
-DOWNLOAD_URL = os.environ.get("UPDATE_DOWNLOAD_URL", "") 
-
-@app.route('/check-update', methods=['GET'])
-def check_update():
-    return jsonify({
-        "latest_version": CURRENT_APP_VERSION,
-        "download_url": DOWNLOAD_URL,
-        "release_notes": "Uma nova atualização obrigatória está disponível com melhorias de estabilidade e novas funcionalidades!"
-    })
-# ==============================================================================      
-
 @app.route('/check-license', methods=['POST'])
 def check_license():
     data = request.json
@@ -120,7 +108,8 @@ def check_license():
     if not raw_key: return jsonify({"active": False, "message": "No key provided"}), 400
     
     main_res = verify_gumroad(raw_key)
-    if not main_res["valid"]: return jsonify({"active": False, "message": main_res['reason']}), 401
+    if not main_res["valid"]: 
+        return jsonify({"active": False, "message": main_res['reason']}), 401
         
     clean_key = raw_key.strip()
     if clean_key in active_sessions:
@@ -129,10 +118,12 @@ def check_license():
     else:
         if machine_id: active_sessions[clean_key] = machine_id
         
+    # Variáveis do Plano Principal
     plan = main_res["plan"]
     current_cycle = main_res["current_cycle"]
     base_limit = 10000 if plan == "premium" else (5000 if plan == "standard" else 0)
     
+    # --- MÁGICA DA RECARGA (ADD-ONS ESPORÁDICOS) ---
     bonus_limit = 0
     valid_addons = 0
     
@@ -140,12 +131,21 @@ def check_license():
         ak = ak.strip()
         if not ak: continue
         ak_res = verify_gumroad(ak)
-        if ak_res["valid"] and ak_res["days_diff"] <= 30:
-            bonus = 10000 if ak_res["plan"] == "premium" else 5000
-            bonus_limit += bonus
-            valid_addons += 1
+        if ak_res["valid"]:
+            # Só soma o bônus se a chave foi comprada há menos de 30 dias!
+            if ak_res["days_diff"] <= 30:
+                bonus = 10000 if ak_res["plan"] == "premium" else 5000
+                bonus_limit += bonus
+                valid_addons += 1
 
-    return jsonify({"active": True, "plan": plan, "current_cycle": current_cycle, "base_limit": base_limit, "bonus_limit": bonus_limit, "valid_addons": valid_addons})
+    return jsonify({
+        "active": True, 
+        "plan": plan, 
+        "current_cycle": current_cycle,
+        "base_limit": base_limit,
+        "bonus_limit": bonus_limit,
+        "valid_addons": valid_addons
+    })
 
 @app.route('/credits', methods=['POST'])
 def check_credits():
@@ -280,5 +280,3 @@ def tts_generate():
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
     app.run(host='0.0.0.0', port=port)
-
-
