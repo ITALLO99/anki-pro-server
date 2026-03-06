@@ -12,12 +12,13 @@ app = Flask(__name__)
 PRODUCT_ID = "6Nm28bZgTFYl9u1nlijDBA==" 
 active_sessions = {} 
 
-# O servidor puxa as chaves do painel do Render, mantendo-as escondidas dos clientes
+# O servidor puxa as chaves do painel do Render
 GROQ_KEY = os.environ.get("GROQ_API_KEY", "")
 DEEPL_KEY = os.environ.get("DEEPL_API_KEY", "")
 AZURE_KEY = os.environ.get("AZURE_SPEECH_KEY", "")
 AZURE_REGION = os.environ.get("AZURE_SPEECH_REGION", "brazilsouth")
 ELEVEN_KEY = os.environ.get("ELEVENLABS_API_KEY", "")
+ELEVEN_KEY_2 = os.environ.get("ELEVENLABS_API_KEY_2", "") # Nova chave para o ElevenLabs 2
 PLAYHT_KEY = os.environ.get("PLAY_HT_API_KEY", "")
 PLAYHT_USER = os.environ.get("PLAY_HT_USER_ID", "")
 WELLSAID_KEY = os.environ.get("WELL_SAID_LABS_API_KEY", "")
@@ -71,7 +72,6 @@ def check_license():
 
 @app.route('/credits', methods=['POST'])
 def check_credits():
-    # Rota mantida para o painel de Live Status do Cliente
     plan = request.json.get("plan", "free")
     credits = 10000 if plan == "premium" else (5000 if plan == "standard" else 0)
     return jsonify({"remaining": credits})
@@ -82,18 +82,14 @@ def check_credits():
 
 @app.route('/ai/generate', methods=['POST'])
 def ai_generate():
-    """Proxy para o Groq (Llama 3) - Gera frases e analisa PDFs"""
     if not GROQ_KEY: return jsonify({"error": "Server missing Groq Key"}), 500
-    
     url = "https://api.groq.com/openai/v1/chat/completions"
     headers = {"Authorization": f"Bearer {GROQ_KEY}", "Content-Type": "application/json"}
-    
     response = requests.post(url, headers=headers, json=request.json)
     return jsonify(response.json()), response.status_code
 
 @app.route('/transcribe', methods=['POST'])
 def transcribe_audio():
-    """Proxy para o Groq Whisper - Transcreve os recortes de vídeo"""
     if not GROQ_KEY: return jsonify({"error": "Server missing Groq Key"}), 500
     if 'file' not in request.files: return jsonify({"error": "No file part"}), 400
     
@@ -108,26 +104,22 @@ def transcribe_audio():
 
 @app.route('/translate/deepl', methods=['POST'])
 def translate_deepl():
-    """Proxy para o DeepL"""
     if not DEEPL_KEY: return jsonify({"error": "Server missing DeepL Key"}), 500
-    
     text = request.json.get("text", "")
     url = "https://api-free.deepl.com/v2/translate"
     data = {'auth_key': DEEPL_KEY, 'text': text, 'source_lang': 'EN', 'target_lang': 'PT'}
-    
     response = requests.post(url, data=data)
     return jsonify(response.json()), response.status_code
 
 @app.route('/tts/generate', methods=['POST'])
 def tts_generate():
-    """O Motor Universal de Vozes - Gera o áudio e devolve o arquivo MP3 direto para o cliente"""
     data = request.json
     text = data.get("text", "")
     provider = data.get("provider", "").lower()
     voice_id = data.get("voice_id", "")
 
     try:
-        # --- AZURE (Via REST API Leve) ---
+        # --- AZURE ---
         if provider == "azure":
             safe_text = re.sub(r'\[.*?\]', '', text).replace("&", "and")
             url = f"https://{AZURE_REGION}.tts.speech.microsoft.com/cognitiveservices/v1"
@@ -146,17 +138,26 @@ def tts_generate():
             
             res = requests.post(url, headers=headers, data=body.encode('utf-8'))
             if res.status_code == 200: return Response(res.content, mimetype="audio/mpeg")
+            else: return jsonify({"error": res.text}), res.status_code
 
-        # --- ELEVENLABS ---
-        elif provider == "elevenlabs":
+        # --- ELEVENLABS 1 e 2 ---
+        elif provider in ["elevenlabs", "elevenlabs2"]:
+            key_to_use = ELEVEN_KEY_2 if provider == "elevenlabs2" else ELEVEN_KEY
+            if not key_to_use: return jsonify({"error": f"Server missing Key for {provider}"}), 500
+            
             url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
-            headers = {"xi-api-key": ELEVEN_KEY, "Content-Type": "application/json"}
-            payload = {"text": text, "model_id": "eleven_v3"}
+            headers = {"xi-api-key": key_to_use, "Content-Type": "application/json"}
+            
+            # CORREÇÃO CRÍTICA DO MODELO: "eleven_multilingual_v2"
+            payload = {"text": text, "model_id": "eleven_multilingual_v2"}
+            
             res = requests.post(url, json=payload, headers=headers)
             if res.status_code == 200: return Response(res.content, mimetype="audio/mpeg")
+            else: return jsonify({"error": res.text}), res.status_code
 
-        # --- CARTESIA (Com injeção de emoção) ---
+        # --- CARTESIA ---
         elif provider == "cartesia":
+            if not CARTESIA_KEY: return jsonify({"error": "Server missing Cartesia Key"}), 500
             url = "https://api.cartesia.ai/tts/bytes"
             headers = {"Cartesia-Version": "2024-06-10", "X-API-Key": CARTESIA_KEY, "Content-Type": "application/json"}
             
@@ -182,6 +183,7 @@ def tts_generate():
             
             res = requests.post(url, headers=headers, json=payload)
             if res.status_code == 200: return Response(res.content, mimetype="audio/mpeg")
+            else: return jsonify({"error": res.text}), res.status_code
 
         # --- PLAYHT ---
         elif provider == "playht":
@@ -198,12 +200,13 @@ def tts_generate():
             payload = {"text": text, "speaker_avatar_id": voice_id}
             res = requests.post(url, headers=headers, json=payload)
             if res.status_code == 200: return Response(res.content, mimetype="audio/mpeg")
-         # --- COQUI XTTS (Hugging Face) ---
+
+        # --- COQUI XTTS (Hugging Face) ---
         elif provider == "coquixtts":
             url = f"https://api-inference.huggingface.co/models/{voice_id}"
             headers = {"Authorization": f"Bearer {HF_KEY}", "Content-Type": "application/json"}
             res = requests.post(url, headers=headers, json={"inputs": text}, timeout=25)
-            if res.status_code == 200: return Response(res.content, mimetype="audio/wav")       
+            if res.status_code == 200: return Response(res.content, mimetype="audio/wav")
             
         return jsonify({"error": f"Provider {provider} failed or invalid."}), 500
         
@@ -212,9 +215,8 @@ def tts_generate():
 
 @app.route('/')
 def home():
-    return "Anki Pro Central Server v1.0 - Active"
+    return "Anki Pro Central Server v3.0 - Active (Fixed Models & Fallbacks)"
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
     app.run(host='0.0.0.0', port=port)
-
