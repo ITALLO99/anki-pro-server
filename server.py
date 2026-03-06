@@ -77,11 +77,19 @@ def ai_generate():
 def transcribe_audio():
     if not GROQ_KEY: return jsonify({"error": "Server missing Groq Key"}), 500
     if 'file' not in request.files: return jsonify({"error": "No file part"}), 400
+    
     file = request.files['file']
     url = "https://api.groq.com/openai/v1/audio/transcriptions"
     headers = {"Authorization": f"Bearer {GROQ_KEY}"}
     files = {"file": (file.filename, file.read(), "audio/mpeg")}
-    data = {"model": "whisper-large-v3", "language": "en"}
+    
+    # A MÁGICA: O prompt com palavras "proibidas" força a IA a desligar o filtro moral de asteriscos!
+    data = {
+        "model": "whisper-large-v3", 
+        "language": "en",
+        "prompt": "Damn, fuck, shit, bitch, motherfucker, cunt, asshole, crap, hell."
+    }
+    
     response = requests.post(url, headers=headers, files=files, data=data)
     return jsonify(response.json()), response.status_code
 
@@ -178,3 +186,4 @@ def tts_generate():
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
     app.run(host='0.0.0.0', port=port)
+
