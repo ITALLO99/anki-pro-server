@@ -48,6 +48,7 @@ def check_update():
 # ==============================================================================
 
 # ==============================================================================
+# ==============================================================================
 # CLASSROOM HUB DATABASE (Teacher & Students)
 # ==============================================================================
 CLASSES_DB_FILE = "classes_db.json"
@@ -68,37 +69,72 @@ def update_class():
     license_key = data.get("license_key", "")
     main_res = verify_gumroad(license_key)
     
-    # Apenas contas Commercial/Teacher podem criar turmas e adicionar Decks
     if not main_res["valid"] or main_res["plan"] != "commercial":
         return jsonify({"error": "Acesso negado. Apenas planos Commercial/Teacher."}), 401
         
     class_code = data.get("class_code", "").strip().upper()
+    class_name = data.get("class_name", "Minha Turma").strip()
     deck_name = data.get("deck_name", "").strip()
     drive_link = data.get("drive_link", "").strip()
     
     db = load_classes()
     
-    # VERIFICAÇÃO DE CONFLITO (O Coração da Segurança)
+    # Verifica conflitos e cria a turma com Lista de Alunos
     if class_code in db:
-        # Se o código já existe, verifica se pertence a ESTE professor
         if db[class_code].get("owner") != license_key:
-            return jsonify({"error": f"O código '{class_code}' já está sendo usado por outro professor. Por favor, escolha um código diferente."}), 400
+            return jsonify({"error": f"O código '{class_code}' já está sendo usado por outro professor."}), 400
     else:
-        # Se for um código novo, regista este professor como dono absoluto
-        db[class_code] = {"owner": license_key, "decks": []}
+        db[class_code] = {"owner": license_key, "name": class_name, "decks": [], "students": []}
         
-    db[class_code]["decks"].append({"name": deck_name, "link": drive_link})
+    # Adiciona o deck se o professor tiver preenchido os campos
+    if deck_name and drive_link:
+        db[class_code]["decks"].append({"name": deck_name, "link": drive_link})
+        
     save_classes(db)
-    return jsonify({"success": True, "message": "Baralho adicionado à turma com sucesso!"})
+    return jsonify({"success": True, "message": "Turma/Baralho atualizado com sucesso!"})
 
-@app.route('/class/get/<class_code>', methods=['GET'])
-def get_class(class_code):
+# NOVA ROTA: O Aluno acessa e deixa o nome na "Lista de Presenças"
+@app.route('/class/access', methods=['POST'])
+def access_class():
+    data = request.json
+    code = data.get("class_code", "").strip().upper()
+    student_name = data.get("student_name", "Aluno").strip()
+    
     db = load_classes()
-    code = class_code.strip().upper()
     if code in db:
-        return jsonify({"success": True, "decks": db[code]["decks"]})
+        # Registra o aluno se ele ainda não estiver na lista
+        if "students" not in db[code]: db[code]["students"] = []
+        if student_name and student_name not in db[code]["students"]:
+            db[code]["students"].append(student_name)
+            save_classes(db)
+            
+        return jsonify({"success": True, "class_name": db[code].get("name", "Turma"), "decks": db[code]["decks"]})
     return jsonify({"success": False, "message": "Turma não encontrada. Verifique o código."}), 404
+
+# NOVA ROTA: O Painel de Controle do Professor (Métricas)
+@app.route('/class/dashboard', methods=['POST'])
+def teacher_dashboard():
+    data = request.json
+    license_key = data.get("license_key", "")
+    
+    db = load_classes()
+    my_classes = {}
+    
+    for code, info in db.items():
+        if info.get("owner") == license_key:
+            my_classes[code] = {
+                "name": info.get("name", "Turma Sem Nome"),
+                "student_count": len(info.get("students", [])),
+                "students": info.get("students", []),
+                "deck_count": len(info.get("decks", []))
+            }
+            
+    return jsonify({"success": True, "classes": my_classes})
 # ==============================================================================
+
+if __name__ == '__main__':
+    port = int(os.environ.get('PORT', 10000))
+    app.run(host='0.0.0.0', port=port)
 
 def alert_admin(provider_name, error_msg):
     """Avisa o dono no Discord se os créditos das APIs acabarem."""
@@ -338,6 +374,7 @@ def tts_generate():
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
     app.run(host='0.0.0.0', port=port)
+
 
 
 
