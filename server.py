@@ -76,8 +76,15 @@ def update_class():
     drive_link = data.get("drive_link", "").strip()
     
     db = load_classes()
-    if class_code not in db:
-        db[class_code] = {"decks": []}
+    
+    # VERIFICAÇÃO DE CONFLITO (O Coração da Segurança)
+    if class_code in db:
+        # Se o código já existe, verifica se pertence a ESTE professor
+        if db[class_code].get("owner") != license_key:
+            return jsonify({"error": f"O código '{class_code}' já está sendo usado por outro professor. Por favor, escolha um código diferente."}), 400
+    else:
+        # Se for um código novo, regista este professor como dono absoluto
+        db[class_code] = {"owner": license_key, "decks": []}
         
     db[class_code]["decks"].append({"name": deck_name, "link": drive_link})
     save_classes(db)
@@ -330,4 +337,5 @@ def tts_generate():
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
     app.run(host='0.0.0.0', port=port)
+
 
