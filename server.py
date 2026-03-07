@@ -46,6 +46,52 @@ def check_update():
     })
 # ==============================================================================
 
+# ==============================================================================
+# CLASSROOM HUB DATABASE (Teacher & Students)
+# ==============================================================================
+CLASSES_DB_FILE = "classes_db.json"
+
+def load_classes():
+    if os.path.exists(CLASSES_DB_FILE):
+        try:
+            with open(CLASSES_DB_FILE, 'r') as f: return json.load(f)
+        except: pass
+    return {}
+
+def save_classes(data):
+    with open(CLASSES_DB_FILE, 'w') as f: json.dump(data, f)
+
+@app.route('/class/update', methods=['POST'])
+def update_class():
+    data = request.json
+    license_key = data.get("license_key", "")
+    main_res = verify_gumroad(license_key)
+    
+    # Apenas contas Commercial/Teacher podem criar turmas e adicionar Decks
+    if not main_res["valid"] or main_res["plan"] != "commercial":
+        return jsonify({"error": "Acesso negado. Apenas planos Commercial/Teacher."}), 401
+        
+    class_code = data.get("class_code", "").strip().upper()
+    deck_name = data.get("deck_name", "").strip()
+    drive_link = data.get("drive_link", "").strip()
+    
+    db = load_classes()
+    if class_code not in db:
+        db[class_code] = {"decks": []}
+        
+    db[class_code]["decks"].append({"name": deck_name, "link": drive_link})
+    save_classes(db)
+    return jsonify({"success": True, "message": "Baralho adicionado à turma com sucesso!"})
+
+@app.route('/class/get/<class_code>', methods=['GET'])
+def get_class(class_code):
+    db = load_classes()
+    code = class_code.strip().upper()
+    if code in db:
+        return jsonify({"success": True, "decks": db[code]["decks"]})
+    return jsonify({"success": False, "message": "Turma não encontrada. Verifique o código."}), 404
+# ==============================================================================
+
 def alert_admin(provider_name, error_msg):
     """Avisa o dono no Discord se os créditos das APIs acabarem."""
     if DISCORD_WEBHOOK_URL:
@@ -82,6 +128,8 @@ def verify_gumroad(license_key):
                     plan = "standard"
                 if "premium" in variant or "premium" in product_name or "premium" in tier: 
                     plan = "premium"
+                if "commercial" in variant or "commercial" in product_name or "commercial" in tier or "teacher" in variant or "teacher" in product_name or "teacher" in tier:
+                    plan = "commercial" 
                 
                 created_at_str = purchase.get("created_at", "")
                 days_diff = 0
@@ -282,3 +330,4 @@ def tts_generate():
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
     app.run(host='0.0.0.0', port=port)
+
