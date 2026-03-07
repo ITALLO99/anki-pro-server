@@ -72,20 +72,23 @@ def update_class():
         return jsonify({"error": "Acesso negado."}), 401
         
     class_code = data.get("class_code", "").strip().upper()
-    class_name = data.get("class_name", "Turma").strip()
+    class_name = data.get("class_name", "").strip()
     deck_name = data.get("deck_name", "").strip()
     drive_link = data.get("drive_link", "").strip()
-    is_private = data.get("is_private", True) # NOVO: Checkbox de aprovação
+    is_private = data.get("is_private", True)
     
     db = load_classes()
     if class_code in db and db[class_code].get("owner") != license_key:
         return jsonify({"error": f"O código '{class_code}' já está em uso."}), 400
         
     if class_code not in db:
-        db[class_code] = {"owner": license_key, "name": class_name, "decks": [], "students": [], "pending_students": [], "is_private": is_private}
+        db[class_code] = {"owner": license_key, "name": class_name if class_name else "Turma", "decks": [], "students": [], "pending_students": [], "is_private": is_private}
+    else:
+        # Se a turma já existe, o professor pode estar apenas a editar o nome ou a privacidade
+        if class_name: db[class_code]["name"] = class_name
+        db[class_code]["is_private"] = is_private
         
-    if "is_private" in data: db[class_code]["is_private"] = is_private
-        
+    # Adiciona um novo deck ou atualiza o link de um existente
     if deck_name and drive_link:
         existing = [d for d in db[class_code]["decks"] if d["name"] == deck_name]
         if not existing: db[class_code]["decks"].append({"name": deck_name, "link": drive_link})
@@ -93,6 +96,21 @@ def update_class():
         
     save_classes(db)
     return jsonify({"success": True, "message": "Turma salva com sucesso!"})
+
+# NOVO: Rota para o professor apagar um baralho específico
+@app.route('/class/deck/delete', methods=['POST'])
+def delete_deck():
+    data = request.json
+    key = data.get("license_key", "")
+    code = data.get("class_code", "").strip().upper()
+    deck_name = data.get("deck_name", "").strip()
+    
+    db = load_classes()
+    if code in db and db[code].get("owner") == key:
+        db[code]["decks"] = [d for d in db[code]["decks"] if d["name"] != deck_name]
+        save_classes(db)
+        return jsonify({"success": True})
+    return jsonify({"error": "Acesso negado."}), 400
 
 @app.route('/class/access', methods=['POST'])
 def access_class():
@@ -406,6 +424,7 @@ def tts_generate():
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
     app.run(host='0.0.0.0', port=port)
+
 
 
 
