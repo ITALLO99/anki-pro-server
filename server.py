@@ -48,8 +48,7 @@ def check_update():
 # ==============================================================================
 
 # ==============================================================================
-# ==============================================================================
-# CLASSROOM HUB DATABASE (Teacher & Students)
+# CLASSROOM HUB DATABASE (Aprovação Manual)
 # ==============================================================================
 CLASSES_DB_FILE = "classes_db.json"
 
@@ -70,30 +69,31 @@ def update_class():
     main_res = verify_gumroad(license_key)
     
     if not main_res["valid"] or main_res["plan"] != "commercial":
-        return jsonify({"error": "Acesso negado. Apenas planos Commercial/Teacher."}), 401
+        return jsonify({"error": "Acesso negado."}), 401
         
     class_code = data.get("class_code", "").strip().upper()
-    class_name = data.get("class_name", "Minha Turma").strip()
+    class_name = data.get("class_name", "Turma").strip()
     deck_name = data.get("deck_name", "").strip()
     drive_link = data.get("drive_link", "").strip()
+    is_private = data.get("is_private", True) # NOVO: Checkbox de aprovação
     
     db = load_classes()
-    
-    # Verifica conflitos e cria a turma com Lista de Alunos
-    if class_code in db:
-        if db[class_code].get("owner") != license_key:
-            return jsonify({"error": f"O código '{class_code}' já está sendo usado por outro professor."}), 400
-    else:
-        db[class_code] = {"owner": license_key, "name": class_name, "decks": [], "students": []}
+    if class_code in db and db[class_code].get("owner") != license_key:
+        return jsonify({"error": f"O código '{class_code}' já está em uso."}), 400
         
-    # Adiciona o deck se o professor tiver preenchido os campos
+    if class_code not in db:
+        db[class_code] = {"owner": license_key, "name": class_name, "decks": [], "students": [], "pending_students": [], "is_private": is_private}
+        
+    if "is_private" in data: db[class_code]["is_private"] = is_private
+        
     if deck_name and drive_link:
-        db[class_code]["decks"].append({"name": deck_name, "link": drive_link})
+        existing = [d for d in db[class_code]["decks"] if d["name"] == deck_name]
+        if not existing: db[class_code]["decks"].append({"name": deck_name, "link": drive_link})
+        else: existing[0]["link"] = drive_link
         
     save_classes(db)
-    return jsonify({"success": True, "message": "Turma/Baralho atualizado com sucesso!"})
+    return jsonify({"success": True, "message": "Turma salva com sucesso!"})
 
-# NOVA ROTA: O Aluno acessa e deixa o nome na "Lista de Presenças"
 @app.route('/class/access', methods=['POST'])
 def access_class():
     data = request.json
@@ -102,35 +102,67 @@ def access_class():
     
     db = load_classes()
     if code in db:
-        # Registra o aluno se ele ainda não estiver na lista
-        if "students" not in db[code]: db[code]["students"] = []
-        if student_name and student_name not in db[code]["students"]:
-            db[code]["students"].append(student_name)
-            save_classes(db)
+        class_info = db[code]
+        if "students" not in class_info: class_info["students"] = []
+        if "pending_students" not in class_info: class_info["pending_students"] = []
+        
+        # Se já é aluno aprovado
+        if student_name in class_info["students"]:
+            return jsonify({"success": True, "status": "approved", "class_name": class_info.get("name"), "decks": class_info["decks"]})
             
-        return jsonify({"success": True, "class_name": db[code].get("name", "Turma"), "decks": db[code]["decks"]})
-    return jsonify({"success": False, "message": "Turma não encontrada. Verifique o código."}), 404
+        # Se a turma exige aprovação
+        if class_info.get("is_private", True):
+            if student_name in class_info["pending_students"]:
+                return jsonify({"success": False, "status": "pending", "message": "Aguardando aprovação do professor."})
+            else:
+                class_info["pending_students"].append(student_name)
+                save_classes(db)
+                return jsonify({"success": False, "status": "pending", "message": "Solicitação enviada ao professor!"})
+        else:
+            # Turma Pública (Entra direto)
+            class_info["students"].append(student_name)
+            save_classes(db)
+            return jsonify({"success": True, "status": "approved", "class_name": class_info.get("name"), "decks": class_info["decks"]})
+            
+    return jsonify({"success": False, "status": "not_found", "message": "Código inválido."}), 404
 
-# NOVA ROTA: O Painel de Controle do Professor (Métricas)
+@app.route('/class/approve', methods=['POST'])
+def approve_student():
+    data = request.json
+    license_key = data.get("license_key", "")
+    code = data.get("class_code", "").strip().upper()
+    student_name = data.get("student_name", "").strip()
+    action = data.get("action", "approve")
+    
+    db = load_classes()
+    if code in db and db[code].get("owner") == license_key:
+        if student_name in db[code].get("pending_students", []):
+            db[code]["pending_students"].remove(student_name)
+            if action == "approve":
+                if "students" not in db[code]: db[code]["students"] = []
+                db[code]["students"].append(student_name)
+            save_classes(db)
+            return jsonify({"success": True})
+    return jsonify({"error": "Ação não autorizada."}), 400
+
 @app.route('/class/dashboard', methods=['POST'])
 def teacher_dashboard():
     data = request.json
     license_key = data.get("license_key", "")
-    
     db = load_classes()
     my_classes = {}
-    
     for code, info in db.items():
         if info.get("owner") == license_key:
             my_classes[code] = {
-                "name": info.get("name", "Turma Sem Nome"),
+                "name": info.get("name", "Turma"),
                 "student_count": len(info.get("students", [])),
                 "students": info.get("students", []),
-                "deck_count": len(info.get("decks", []))
+                "pending_students": info.get("pending_students", []),
+                "deck_count": len(info.get("decks", [])),
+                "decks": info.get("decks", []),
+                "is_private": info.get("is_private", True)
             }
-            
     return jsonify({"success": True, "classes": my_classes})
-# ==============================================================================
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
@@ -374,6 +406,7 @@ def tts_generate():
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
     app.run(host='0.0.0.0', port=port)
+
 
 
 
