@@ -421,6 +421,9 @@ def tts_generate():
             else:
                 return jsonify({"error": f"HF Error: {res_api.text}"}), res_api.status_code
 
+    except Exception as e:
+        return jsonify({"error": f"Falha interna no gerador de voz: {str(e)}"}), 500
+
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
     app.run(host='0.0.0.0', port=port)
