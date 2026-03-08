@@ -412,23 +412,19 @@ def tts_generate():
 
         elif provider == "coquixtts":
             url = f"https://router.huggingface.co/hf-inference/models/{voice_id}"
-            
-            # COLOQUE A SUA CHAVE AQUI (Mantenha o Bearer e o espaço antes da chave!)
             headers = {"Authorization": "Bearer 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"}
             
-            # A Hugging Face usa o formato {"inputs": "texto"}
-            try:
-                res_api = requests.post(url, json={"inputs": text}, headers=headers, timeout=30)
-                if res_api.status_code == 200:
-                    return res_api.content, 200
-                else:
-                    return jsonify({"error": f"HF Error: {res_api.text}"}), res_api.status_code
-            except Exception as e:
-                return jsonify({"error": f"HF Connection failed: {str(e)}"}), 500
+            res_api = requests.post(url, json={"inputs": text}, headers=headers, timeout=30)
+            
+            if res_api.status_code == 200:
+                return res_api.content, 200
+            else:
+                return jsonify({"error": f"HF Error: {res_api.text}"}), res_api.status_code
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
     app.run(host='0.0.0.0', port=port)
+
 
 
 
