@@ -411,7 +411,7 @@ def tts_generate():
             else: return safe_tts_error(res, "WellSaid Labs")
 
         elif provider == "coquixtts":
-            url = f"https://router.huggingface.co/models/{voice_id}"
+            url = f"https://router.huggingface.co/hf-inference/models/{voice_id}"
             headers = {"Authorization": f"Bearer {HF_KEY}", "Content-Type": "application/json"}
             res = requests.post(url, headers=headers, json={"inputs": text}, timeout=25)
             if res.status_code == 200: return Response(res.content, mimetype="audio/wav")
@@ -424,6 +424,7 @@ def tts_generate():
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
     app.run(host='0.0.0.0', port=port)
+
 
 
 
