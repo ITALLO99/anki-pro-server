@@ -414,7 +414,7 @@ def tts_generate():
             url = f"https://router.huggingface.co/hf-inference/models/{voice_id}"
             
             # COLOQUE A SUA CHAVE AQUI (Mantenha o Bearer e o espaço antes da chave!)
-            headers = {"Authorization": "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"}
+            headers = {"Authorization": "Bearer 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"}
             
             # A Hugging Face usa o formato {"inputs": "texto"}
             try:
@@ -429,6 +429,7 @@ def tts_generate():
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
     app.run(host='0.0.0.0', port=port)
+
 
 
 
